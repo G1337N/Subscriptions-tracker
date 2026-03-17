@@ -3,6 +3,7 @@ import { Store } from '@tauri-apps/plugin-store'
 
 const store = new Store('subscriptions.json')
 const localStorageStateKey = 'subscription-tracker.state.v1'
+const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
 const currencyFormatter = new Intl.NumberFormat(undefined, {
   style: 'currency',
@@ -145,6 +146,20 @@ const normalizeSubscription = (subscription) => {
 
 const getTodayDate = () => new Date().toISOString().slice(0, 10)
 
+const addMonthsToDateValue = (dateValue, monthsToAdd) => {
+  const baseDate = dateValue ? new Date(`${dateValue}T00:00:00`) : new Date()
+  const currentDay = baseDate.getDate()
+  const shiftedDate = new Date(baseDate)
+
+  shiftedDate.setDate(1)
+  shiftedDate.setMonth(shiftedDate.getMonth() + monthsToAdd)
+
+  const lastDayOfTargetMonth = new Date(shiftedDate.getFullYear(), shiftedDate.getMonth() + 1, 0).getDate()
+  shiftedDate.setDate(Math.min(currentDay, lastDayOfTargetMonth))
+
+  return shiftedDate.toISOString().slice(0, 10)
+}
+
 const toPersistedSubscription = (subscription) => ({
   id: subscription.id,
   name: subscription.name || '',
@@ -218,6 +233,7 @@ export default function App() {
   const [themePreference, setThemePreference] = useState('system')
   const [systemTheme, setSystemTheme] = useState(getSystemTheme)
   const [isLoaded, setIsLoaded] = useState(false)
+  const [storeAccessible, setStoreAccessible] = useState(true)
   const [persistenceError, setPersistenceError] = useState('')
 
   const effectiveTheme = themePreference === 'system' ? systemTheme : themePreference
@@ -242,10 +258,13 @@ export default function App() {
     let mounted = true
 
     const loadSubscriptions = async () => {
-      let loadedFromStore = false
+      let canUseStore = false
+      let hasAnyStoreData = false
 
       try {
         await store.load()
+        canUseStore = true
+
         const [storedSubscriptions, storedTheme] = await Promise.all([
           store.get('subscriptions'),
           store.get('themePreference'),
@@ -255,28 +274,34 @@ export default function App() {
 
         if (Array.isArray(storedSubscriptions)) {
           setSubscriptions(storedSubscriptions.map(normalizeSubscription))
-          loadedFromStore = true
+          hasAnyStoreData = true
         }
 
         if (typeof storedTheme === 'string' && themeOptions.includes(storedTheme)) {
           setThemePreference(storedTheme)
-          loadedFromStore = true
+          hasAnyStoreData = true
         }
       } catch {
-        // fall back to localStorage below
+        canUseStore = false
       }
 
-      if (!loadedFromStore && mounted) {
-        const localState = parseLocalState()
-        if (localState) {
-          if (Array.isArray(localState.subscriptions)) {
-            setSubscriptions(localState.subscriptions.map(normalizeSubscription))
-          }
-          if (typeof localState.themePreference === 'string' && themeOptions.includes(localState.themePreference)) {
-            setThemePreference(localState.themePreference)
-          }
-          setPersistenceError('Tauri store unavailable. Loaded data from local fallback storage.')
+      if (mounted) {
+        setStoreAccessible(canUseStore)
+      }
+
+      const localState = parseLocalState()
+
+      if (!hasAnyStoreData && localState && mounted) {
+        if (Array.isArray(localState.subscriptions)) {
+          setSubscriptions(localState.subscriptions.map(normalizeSubscription))
         }
+        if (typeof localState.themePreference === 'string' && themeOptions.includes(localState.themePreference)) {
+          setThemePreference(localState.themePreference)
+        }
+      }
+
+      if (mounted && !canUseStore && localState && isTauriRuntime) {
+        setPersistenceError('App storage unavailable. Loaded data from local fallback storage.')
       }
 
       if (mounted) {
@@ -299,14 +324,16 @@ export default function App() {
       let storeError = null
       let localStorageError = null
 
-      try {
-        await Promise.all([
-          store.set('subscriptions', persistedState.subscriptions),
-          store.set('themePreference', persistedState.themePreference),
-        ])
-        await store.save()
-      } catch (error) {
-        storeError = error
+      if (storeAccessible) {
+        try {
+          await Promise.all([
+            store.set('subscriptions', persistedState.subscriptions),
+            store.set('themePreference', persistedState.themePreference),
+          ])
+          await store.save()
+        } catch (error) {
+          storeError = error
+        }
       }
 
       try {
@@ -325,8 +352,18 @@ export default function App() {
         return
       }
 
+      if (!storeAccessible && localStorageError) {
+        setPersistenceError('Fallback storage save failed.')
+        return
+      }
+
       if (localStorageError) {
         setPersistenceError('Fallback storage save failed. App storage is still active.')
+        return
+      }
+
+      if (!storeAccessible && isTauriRuntime) {
+        setPersistenceError('App storage unavailable. Changes are saved in local fallback storage.')
         return
       }
 
@@ -334,7 +371,7 @@ export default function App() {
     }
 
     persist()
-  }, [subscriptions, themePreference, isLoaded])
+  }, [subscriptions, themePreference, isLoaded, storeAccessible])
 
   const filteredSubscriptions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -409,9 +446,13 @@ export default function App() {
 
   const handleDateChange = (event) => {
     handleChange(event)
-    requestAnimationFrame(() => {
-      event.target.blur()
-    })
+  }
+
+  const handleShiftDate = (fieldName, monthDelta) => {
+    setFormState((prev) => ({
+      ...prev,
+      [fieldName]: addMonthsToDateValue(prev[fieldName], monthDelta),
+    }))
   }
 
   const handleSubmit = (event) => {
@@ -784,23 +825,55 @@ export default function App() {
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
                     <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Next payment</label>
-                    <input
-                      name="nextPayment"
-                      type="date"
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
-                      value={formState.nextPayment}
-                      onChange={handleDateChange}
-                    />
+                    <div className="mt-1 flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300"
+                        onClick={() => handleShiftDate('nextPayment', -1)}
+                      >
+                        −1M
+                      </button>
+                      <input
+                        name="nextPayment"
+                        type="date"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
+                        value={formState.nextPayment}
+                        onChange={handleDateChange}
+                      />
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300"
+                        onClick={() => handleShiftDate('nextPayment', 1)}
+                      >
+                        +1M
+                      </button>
+                    </div>
                   </div>
                   <div>
                     <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Current payment</label>
-                    <input
-                      name="currentPayment"
-                      type="date"
-                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
-                      value={formState.currentPayment}
-                      onChange={handleDateChange}
-                    />
+                    <div className="mt-1 flex items-center gap-2">
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300"
+                        onClick={() => handleShiftDate('currentPayment', -1)}
+                      >
+                        −1M
+                      </button>
+                      <input
+                        name="currentPayment"
+                        type="date"
+                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
+                        value={formState.currentPayment}
+                        onChange={handleDateChange}
+                      />
+                      <button
+                        type="button"
+                        className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300"
+                        onClick={() => handleShiftDate('currentPayment', 1)}
+                      >
+                        +1M
+                      </button>
+                    </div>
                   </div>
                 </div>
                 <div>
