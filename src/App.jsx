@@ -26,9 +26,16 @@ const initialFormState = {
 const statusOptions = ['Active', 'Paused', 'Cancelled']
 
 const statusStyles = {
-  Active: 'bg-emerald-100 text-emerald-800',
-  Paused: 'bg-amber-100 text-amber-800',
-  Cancelled: 'bg-slate-200 text-slate-700',
+  Active: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-500/20 dark:text-emerald-300',
+  Paused: 'bg-amber-100 text-amber-800 dark:bg-amber-500/20 dark:text-amber-300',
+  Cancelled: 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-300',
+}
+
+const themeOptions = ['light', 'dark', 'system']
+
+const getSystemTheme = () => {
+  if (typeof window === 'undefined') return 'light'
+  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
 const toDateValue = (value) => {
@@ -111,20 +118,49 @@ export default function App() {
   const [categoryFilter, setCategoryFilter] = useState('All')
   const [sortKey, setSortKey] = useState('nextPayment')
   const [errorMessage, setErrorMessage] = useState('')
+  const [themePreference, setThemePreference] = useState('system')
+  const [systemTheme, setSystemTheme] = useState(getSystemTheme)
   const [isLoaded, setIsLoaded] = useState(false)
+
+  const effectiveTheme = themePreference === 'system' ? systemTheme : themePreference
+
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    const updateSystemTheme = (event) => {
+      setSystemTheme(event.matches ? 'dark' : 'light')
+    }
+
+    media.addEventListener('change', updateSystemTheme)
+    return () => media.removeEventListener('change', updateSystemTheme)
+  }, [])
+
+  useEffect(() => {
+    const root = document.documentElement
+    root.classList.toggle('dark', effectiveTheme === 'dark')
+    root.style.colorScheme = effectiveTheme === 'dark' ? 'dark' : 'light'
+  }, [effectiveTheme])
 
   useEffect(() => {
     let mounted = true
 
     const loadSubscriptions = async () => {
       try {
-        const stored = await store.get('subscriptions')
+        const [storedSubscriptions, storedTheme] = await Promise.all([
+          store.get('subscriptions'),
+          store.get('themePreference'),
+        ])
+
         if (mounted) {
-          if (Array.isArray(stored)) {
-            setSubscriptions(stored.map(normalizeSubscription))
+          if (Array.isArray(storedSubscriptions)) {
+            setSubscriptions(storedSubscriptions.map(normalizeSubscription))
           } else {
             setSubscriptions([])
           }
+
+          if (typeof storedTheme === 'string' && themeOptions.includes(storedTheme)) {
+            setThemePreference(storedTheme)
+          }
+
           setIsLoaded(true)
         }
       } catch {
@@ -146,12 +182,15 @@ export default function App() {
     if (!isLoaded) return
 
     const persist = async () => {
-      await store.set('subscriptions', subscriptions)
+      await Promise.all([
+        store.set('subscriptions', subscriptions),
+        store.set('themePreference', themePreference),
+      ])
       await store.save()
     }
 
     persist()
-  }, [subscriptions, isLoaded])
+  }, [subscriptions, themePreference, isLoaded])
 
   const filteredSubscriptions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
@@ -304,49 +343,66 @@ export default function App() {
     )
   }
 
+  const handleThemeToggle = () => {
+    setThemePreference((currentPreference) => {
+      const currentTheme = currentPreference === 'system' ? systemTheme : currentPreference
+      return currentTheme === 'dark' ? 'light' : 'dark'
+    })
+  }
+
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
+    <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-10">
-        <header className="flex flex-col gap-4 rounded-2xl bg-white px-8 py-6 shadow-soft">
-          <div className="flex flex-col gap-2">
-            <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-500">Subscription Tracker</p>
-            <h1 className="text-3xl font-semibold">Keep every renewal in one calm dashboard.</h1>
-            <p className="text-slate-500">Track costs, next billing dates, and total spend across your subscriptions.</p>
+        <header className="flex flex-col gap-4 rounded-2xl bg-white px-8 py-6 shadow-soft dark:bg-slate-900 dark:shadow-none dark:ring-1 dark:ring-slate-800">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="flex flex-col gap-2">
+              <p className="text-sm font-semibold uppercase tracking-[0.2em] text-brand-500">Subscription Tracker</p>
+              <h1 className="text-3xl font-semibold">Keep every renewal in one calm dashboard.</h1>
+              <p className="text-slate-500 dark:text-slate-400">Track costs, next billing dates, and total spend across your subscriptions.</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleThemeToggle}
+              className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-700 transition hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-200 dark:hover:border-brand-500 dark:hover:text-brand-300"
+            >
+              {effectiveTheme === 'dark' ? '☀️ Light mode' : '🌙 Dark mode'}
+            </button>
           </div>
+          <p className="text-xs text-slate-400 dark:text-slate-500">Theme default: system preference (saved after first toggle).</p>
           <div className="grid gap-4 md:grid-cols-3">
-            <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-sm text-slate-500">Monthly spend</p>
-              <p className="text-2xl font-semibold text-slate-900">{currencyFormatter.format(metrics.totalMonthly)}</p>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
+              <p className="text-sm text-slate-500 dark:text-slate-400">Monthly spend</p>
+              <p className="text-2xl font-semibold text-slate-900 dark:text-slate-100">{currencyFormatter.format(metrics.totalMonthly)}</p>
             </div>
-            <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-sm text-slate-500">Annual spend</p>
-              <p className="text-2xl font-semibold text-slate-900">{currencyFormatter.format(metrics.totalYearly)}</p>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
+              <p className="text-sm text-slate-500 dark:text-slate-400">Annual spend</p>
+              <p className="text-2xl font-semibold text-slate-900 dark:text-slate-100">{currencyFormatter.format(metrics.totalYearly)}</p>
             </div>
-            <div className="rounded-xl border border-slate-100 bg-slate-50 p-4">
-              <p className="text-sm text-slate-500">Active subscriptions</p>
-              <p className="text-2xl font-semibold text-slate-900">{metrics.activeCount}</p>
+            <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
+              <p className="text-sm text-slate-500 dark:text-slate-400">Active subscriptions</p>
+              <p className="text-2xl font-semibold text-slate-900 dark:text-slate-100">{metrics.activeCount}</p>
             </div>
           </div>
         </header>
 
         <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-          <div className="rounded-2xl bg-white p-6 shadow-soft">
+          <div className="rounded-2xl bg-white p-6 shadow-soft dark:bg-slate-900 dark:shadow-none dark:ring-1 dark:ring-slate-800">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-semibold">Your subscriptions</h2>
-                <p className="text-sm text-slate-500">{filteredSubscriptions.length} items</p>
+                <p className="text-sm text-slate-500 dark:text-slate-400">{filteredSubscriptions.length} items</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <div className="relative">
                   <input
-                    className="w-56 rounded-full border border-slate-200 px-4 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                    className="w-56 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                     placeholder="Search"
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                   />
                 </div>
                 <select
-                  className="rounded-full border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                   value={statusFilter}
                   onChange={(event) => setStatusFilter(event.target.value)}
                 >
@@ -357,7 +413,7 @@ export default function App() {
                   ))}
                 </select>
                 <select
-                  className="rounded-full border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                   value={categoryFilter}
                   onChange={(event) => setCategoryFilter(event.target.value)}
                 >
@@ -368,7 +424,7 @@ export default function App() {
                   ))}
                 </select>
                 <select
-                  className="rounded-full border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                  className="rounded-full border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                   value={sortKey}
                   onChange={(event) => setSortKey(event.target.value)}
                 >
@@ -383,7 +439,7 @@ export default function App() {
               {filteredSubscriptions.map((subscription) => (
                 <div
                   key={subscription.id}
-                  className="flex flex-col gap-4 rounded-xl border border-slate-100 p-4 md:flex-row md:items-center md:justify-between"
+                  className="flex flex-col gap-4 rounded-xl border border-slate-100 p-4 md:flex-row md:items-center md:justify-between dark:border-slate-800"
                 >
                   <div className="flex flex-1 flex-col gap-2">
                     <div className="flex items-center gap-3">
@@ -394,7 +450,7 @@ export default function App() {
                         {subscription.status}
                       </span>
                     </div>
-                    <div className="flex flex-wrap gap-3 text-sm text-slate-500">
+                    <div className="flex flex-wrap gap-3 text-sm text-slate-500 dark:text-slate-400">
                       <span>{subscription.category}</span>
                       <span>•</span>
                       <span>{subscription.billingCycle}</span>
@@ -405,7 +461,7 @@ export default function App() {
                     </div>
                     {subscription.link && (
                       <a
-                        className="text-sm text-brand-600 underline hover:text-brand-700"
+                        className="text-sm text-brand-600 underline hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
                         href={subscription.link}
                         target="_blank"
                         rel="noreferrer"
@@ -413,37 +469,37 @@ export default function App() {
                         Open subscription link
                       </a>
                     )}
-                    <p className="text-sm text-slate-500">{subscription.notes || 'No notes yet.'}</p>
+                    <p className="text-sm text-slate-500 dark:text-slate-400">{subscription.notes || 'No notes yet.'}</p>
                   </div>
                   <div className="flex flex-col items-start gap-3 text-sm md:items-end">
                     <div className="text-right">
-                      <p className="text-xs uppercase tracking-wide text-slate-400">Next payment</p>
+                      <p className="text-xs uppercase tracking-wide text-slate-400 dark:text-slate-500">Next payment</p>
                       <p className="text-base font-semibold">{toDateValue(subscription.nextPayment)}</p>
-                      <p className="text-xs text-slate-500">{getDueLabel(subscription.nextPayment)}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">{getDueLabel(subscription.nextPayment)}</p>
                       {subscription.currentPayment && (
-                        <p className="text-xs text-slate-500">Current payment: {toDateValue(subscription.currentPayment)}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">Current payment: {toDateValue(subscription.currentPayment)}</p>
                       )}
                       {subscription.statusChangedAt && (
-                        <p className="text-xs text-slate-500">
+                        <p className="text-xs text-slate-500 dark:text-slate-400">
                           {subscription.status} on {toDateValue(subscription.statusChangedAt)}
                         </p>
                       )}
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <button
-                        className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600"
+                        className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300"
                         onClick={() => handleStatusToggle(subscription)}
                       >
                         {subscription.status === 'Active' ? 'Pause with date' : 'Activate with date'}
                       </button>
                       <button
-                        className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600"
+                        className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300"
                         onClick={() => handleEdit(subscription)}
                       >
                         Edit
                       </button>
                       <button
-                        className="rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-600 hover:border-rose-400"
+                        className="rounded-full border border-rose-200 px-3 py-1 text-xs font-semibold text-rose-600 hover:border-rose-400 dark:border-rose-500/40 dark:text-rose-300"
                         onClick={() => handleDelete(subscription.id)}
                       >
                         Delete
@@ -456,16 +512,16 @@ export default function App() {
           </div>
 
           <aside className="flex flex-col gap-6">
-            <div className="rounded-2xl bg-white p-6 shadow-soft">
+            <div className="rounded-2xl bg-white p-6 shadow-soft dark:bg-slate-900 dark:shadow-none dark:ring-1 dark:ring-slate-800">
               <h2 className="text-xl font-semibold">{editingId ? 'Edit subscription' : 'Add subscription'}</h2>
-              <p className="text-sm text-slate-500">Capture the next renewal in seconds.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Capture the next renewal in seconds.</p>
 
               <form className="mt-4 flex flex-col gap-3" onSubmit={handleSubmit}>
                 <div>
-                  <label className="text-sm font-medium text-slate-600">Name</label>
+                  <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Name</label>
                   <input
                     name="name"
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                     value={formState.name}
                     onChange={handleChange}
                     placeholder="e.g. Netflix"
@@ -473,23 +529,23 @@ export default function App() {
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <label className="text-sm font-medium text-slate-600">Cost</label>
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Cost</label>
                     <input
                       name="amount"
                       type="number"
                       min="0"
                       step="0.01"
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                       value={formState.amount}
                       onChange={handleChange}
                       placeholder="15.99"
                     />
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600">Billing cycle</label>
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Billing cycle</label>
                     <select
                       name="billingCycle"
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                       value={formState.billingCycle}
                       onChange={handleChange}
                     >
@@ -503,10 +559,10 @@ export default function App() {
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <label className="text-sm font-medium text-slate-600">Category</label>
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Category</label>
                     <select
                       name="category"
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                       value={formState.category}
                       onChange={handleChange}
                     >
@@ -518,10 +574,10 @@ export default function App() {
                     </select>
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600">Status</label>
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Status</label>
                     <select
                       name="status"
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                       value={formState.status}
                       onChange={handleChange}
                     >
@@ -535,42 +591,42 @@ export default function App() {
                 </div>
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <label className="text-sm font-medium text-slate-600">Next payment</label>
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Next payment</label>
                     <input
                       name="nextPayment"
                       type="date"
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                       value={formState.nextPayment}
                       onChange={handleChange}
                     />
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600">Current payment</label>
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Current payment</label>
                     <input
                       name="currentPayment"
                       type="date"
-                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                       value={formState.currentPayment}
                       onChange={handleChange}
                     />
                   </div>
                 </div>
                 <div>
-                  <label className="text-sm font-medium text-slate-600">Subscription link</label>
+                  <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Subscription link</label>
                   <input
                     name="link"
                     type="url"
-                    className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                     value={formState.link}
                     onChange={handleChange}
                     placeholder="https://example.com/manage"
                   />
                 </div>
                 <div>
-                  <label className="text-sm font-medium text-slate-600">Notes</label>
+                  <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Notes</label>
                   <textarea
                     name="notes"
-                    className="mt-1 min-h-[90px] w-full rounded-lg border border-slate-200 px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200"
+                    className="mt-1 min-h-[90px] w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                     value={formState.notes}
                     onChange={handleChange}
                     placeholder="Plan details, renewal notes, etc."
@@ -593,7 +649,7 @@ export default function App() {
                   {editingId && (
                     <button
                       type="button"
-                      className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600"
+                      className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300"
                       onClick={resetForm}
                     >
                       Cancel edit
@@ -603,21 +659,21 @@ export default function App() {
               </form>
             </div>
 
-            <div className="rounded-2xl bg-white p-6 shadow-soft">
+            <div className="rounded-2xl bg-white p-6 shadow-soft dark:bg-slate-900 dark:shadow-none dark:ring-1 dark:ring-slate-800">
               <h2 className="text-xl font-semibold">Upcoming renewals</h2>
-              <p className="text-sm text-slate-500">Your next three active renewals.</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Your next three active renewals.</p>
               <div className="mt-4 space-y-3">
-                {upcomingPayments.length === 0 && <p className="text-sm text-slate-500">No active subscriptions yet.</p>}
+                {upcomingPayments.length === 0 && <p className="text-sm text-slate-500 dark:text-slate-400">No active subscriptions yet.</p>}
                 {upcomingPayments.map((subscription) => (
-                  <div key={subscription.id} className="rounded-xl border border-slate-100 px-4 py-3">
+                  <div key={subscription.id} className="rounded-xl border border-slate-100 px-4 py-3 dark:border-slate-800">
                     <div className="flex items-center justify-between">
                       <div>
                         <p className="font-semibold">{subscription.name}</p>
-                        <p className="text-xs text-slate-500">{getDueLabel(subscription.nextPayment)}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{getDueLabel(subscription.nextPayment)}</p>
                       </div>
                       <div className="text-right">
                         <p className="text-sm font-semibold">{currencyFormatter.format(subscription.amount)}</p>
-                        <p className="text-xs text-slate-500">{subscription.billingCycle}</p>
+                        <p className="text-xs text-slate-500 dark:text-slate-400">{subscription.billingCycle}</p>
                       </div>
                     </div>
                   </div>
