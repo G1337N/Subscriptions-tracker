@@ -1,16 +1,65 @@
-# React + Vite
+# Subscription Tracker (Desktop)
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A desktop app to track subscriptions, renewal dates, links, status, and real spend.
 
-Currently, two official plugins are available:
+Built with **Tauri + React**.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+## What users can do
 
-## React Compiler
+- Add subscriptions with service name, category, cost, billing cycle
+- Set next payment and current payment dates
+- Use custom category details for `Other`
+- Pause/activate subscriptions with date
+- Save and open direct management links in browser
+- See spend summary based on logged payments (no fake projections)
+- Use light/dark mode
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Download & install (Linux)
 
-## Expanding the ESLint configuration
+Go to **Releases** and download one of:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- `.deb` (Ubuntu / Debian / Linux Mint)
+- `.rpm` (Fedora / RHEL / CentOS)
+
+Detailed install steps: see [INSTALL_LINUX.md](./INSTALL_LINUX.md)
+
+## Run locally (dev)
+
+```bash
+cd /home/l/projects/subscription-tracker
+source ~/.cargo/env
+npm install
+npx tauri dev
+```
+
+## Build locally (Linux)
+
+```bash
+cd /home/l/projects/subscription-tracker
+source ~/.cargo/env
+npm install
+npx tauri build --bundles deb,rpm
+```
+
+Binary output:
+
+- `src-tauri/target/release/subscription-tracker`
+
+Package output:
+
+- `src-tauri/target/release/bundle/deb/*.deb`
+- `src-tauri/target/release/bundle/rpm/*.rpm`
+
+## Project structure
+
+- `src/` — React UI
+- `src-tauri/` — native desktop shell (Rust/Tauri)
+- `.github/workflows/release.yml` — build and publish Linux packages on version tags
+
+## Versioning / releases
+
+When a tag like `v0.1.0` is pushed, GitHub Actions builds Linux installers and publishes them to a GitHub Release.
+
+## License
+
+TBD (add a LICENSE file before public distribution if needed)
