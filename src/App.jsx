@@ -167,6 +167,7 @@ const DatePicker = ({ name, value, onChange, placeholder }) => {
     }
   }, [isOpen])
 
+
   const year = viewDate.getFullYear()
   const month = viewDate.getMonth()
   const firstDayIndex = (new Date(year, month, 1).getDay() + 6) % 7
@@ -203,7 +204,7 @@ const DatePicker = ({ name, value, onChange, placeholder }) => {
       </button>
 
       {isOpen && (
-        <div className="absolute z-20 mt-2 w-[18rem] rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+        <div className="absolute left-0 z-[70] mt-2 w-[18rem] rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900">
           <div className="mb-2 flex items-center justify-between gap-1 text-xs font-semibold">
             <button type="button" className="rounded px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => setViewDate(new Date(year, month - 1, 1))}>
               ←
@@ -319,6 +320,19 @@ export default function App() {
   const [renewForm, setRenewForm] = useState({ amountPaid: '', paymentDate: getTodayDate(), newExpiryDate: '' })
   const [renewError, setRenewError] = useState('')
   const storeRef = useRef(null)
+
+  useEffect(() => {
+    if (!renewingSubscriptionId) return
+
+    const { body } = document
+    const previousOverflow = body.style.overflow
+
+    body.style.overflow = 'hidden'
+
+    return () => {
+      body.style.overflow = previousOverflow
+    }
+  }, [renewingSubscriptionId])
 
   const effectiveTheme = themePreference === 'system' ? systemTheme : themePreference
 
@@ -980,22 +994,22 @@ export default function App() {
                 )}
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
-                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Next payment</label>
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Current payment</label>
                     <div className="mt-1">
                       <DatePicker
-                        name="nextPayment"
-                        value={formState.nextPayment}
+                        name="currentPayment"
+                        value={formState.currentPayment}
                         onChange={handleDateChange}
                         placeholder="Select date"
                       />
                     </div>
                   </div>
                   <div>
-                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Current payment</label>
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Next payment</label>
                     <div className="mt-1">
                       <DatePicker
-                        name="currentPayment"
-                        value={formState.currentPayment}
+                        name="nextPayment"
+                        value={formState.nextPayment}
                         onChange={handleDateChange}
                         placeholder="Select date"
                       />
@@ -1078,10 +1092,10 @@ export default function App() {
         </section>
 
         {renewingSubscriptionId && (
-          <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/40 px-4">
+          <div className="fixed inset-0 z-30 overflow-y-auto overscroll-contain bg-slate-950/40 px-4 py-6">
             <form
               onSubmit={handleRenewSubmit}
-              className="w-full max-w-md rounded-2xl bg-white p-5 shadow-soft dark:bg-slate-900 dark:ring-1 dark:ring-slate-800"
+              className="pointer-events-auto mx-auto my-2 w-full max-w-md rounded-2xl bg-white p-5 shadow-soft dark:bg-slate-900 dark:ring-1 dark:ring-slate-800 sm:my-8"
             >
               <h3 className="text-lg font-semibold">Renew subscription</h3>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Log the renewal payment and set the new expiry date.</p>
