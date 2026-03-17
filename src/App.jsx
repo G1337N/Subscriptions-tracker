@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { open as openExternal } from '@tauri-apps/plugin-shell'
 import { load } from '@tauri-apps/plugin-store'
 
 const localStorageStateKey = 'subscription-tracker.state.v1'
@@ -100,6 +101,23 @@ const normalizeLink = (value) => {
   if (!trimmed) return ''
   if (/^https?:\/\//i.test(trimmed)) return trimmed
   return `https://${trimmed}`
+}
+
+const getSafeExternalUrl = (value) => {
+  const normalized = normalizeLink(value || '')
+  if (!normalized) {
+    return { url: null, error: 'No subscription URL is set yet.' }
+  }
+
+  try {
+    const parsed = new URL(normalized)
+    if (!['http:', 'https:'].includes(parsed.protocol)) {
+      return { url: null, error: 'Only HTTP(S) links can be opened.' }
+    }
+    return { url: parsed.toString(), error: '' }
+  } catch {
+    return { url: null, error: 'This subscription URL is invalid. Please edit and fix it.' }
+  }
 }
 
 const getCategoryLabel = (category, categoryDetail) => {
@@ -352,6 +370,7 @@ export default function App() {
   const [categoryFilter, setCategoryFilter] = useState('All')
   const [sortKey, setSortKey] = useState('nextPayment')
   const [errorMessage, setErrorMessage] = useState('')
+  const [linkErrors, setLinkErrors] = useState({})
   const [themePreference, setThemePreference] = useState('system')
   const [systemTheme, setSystemTheme] = useState(getSystemTheme)
   const [isLoaded, setIsLoaded] = useState(false)
@@ -572,10 +591,12 @@ export default function App() {
     const normalizedLinkValue = normalizeLink(formState.link)
     const parsedAmount = parseAmount(formState.amount)
 
+    const targetId = editingId ?? `sub-${Date.now()}`
+
     setSubscriptions((prev) => {
       const existing = editingId ? prev.find((subscription) => subscription.id === editingId) : null
       const nextEntry = {
-        id: editingId ?? `sub-${Date.now()}`,
+        id: targetId,
         name: formState.name.trim(),
         amount: parsedAmount,
         billingCycle: formState.billingCycle,
@@ -605,6 +626,13 @@ export default function App() {
       return [nextEntry, ...prev]
     })
 
+    setLinkErrors((prev) => {
+      if (!prev[targetId]) return prev
+      const next = { ...prev }
+      delete next[targetId]
+      return next
+    })
+
     resetForm()
   }
 
@@ -627,6 +655,12 @@ export default function App() {
   const handleDelete = (subscriptionId) => {
     if (!confirm('Delete this subscription?')) return
     setSubscriptions((prev) => prev.filter((subscription) => subscription.id !== subscriptionId))
+    setLinkErrors((prev) => {
+      if (!prev[subscriptionId]) return prev
+      const next = { ...prev }
+      delete next[subscriptionId]
+      return next
+    })
     if (editingId === subscriptionId) {
       resetForm()
     }
@@ -655,6 +689,35 @@ export default function App() {
       const currentTheme = currentPreference === 'system' ? systemTheme : currentPreference
       return currentTheme === 'dark' ? 'light' : 'dark'
     })
+  }
+
+  const handleOpenSubscriptionLink = async (subscription) => {
+    const { url, error } = getSafeExternalUrl(subscription.link)
+
+    if (!url) {
+      setLinkErrors((prev) => ({ ...prev, [subscription.id]: error }))
+      return
+    }
+
+    try {
+      if (isTauriRuntime) {
+        await openExternal(url)
+      } else {
+        window.open(url, '_blank', 'noopener,noreferrer')
+      }
+
+      setLinkErrors((prev) => {
+        if (!prev[subscription.id]) return prev
+        const next = { ...prev }
+        delete next[subscription.id]
+        return next
+      })
+    } catch {
+      setLinkErrors((prev) => ({
+        ...prev,
+        [subscription.id]: 'Could not open this link. Please check the URL and try again.',
+      }))
+    }
   }
 
   return (
@@ -773,14 +836,18 @@ export default function App() {
                       </span>
                     </div>
                     {subscription.link && (
-                      <a
-                        className="text-sm text-brand-600 underline hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
-                        href={subscription.link}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Open subscription link
-                      </a>
+                      <div className="flex flex-col items-start gap-1">
+                        <button
+                          type="button"
+                          className="text-sm text-brand-600 underline hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
+                          onClick={() => handleOpenSubscriptionLink(subscription)}
+                        >
+                          Open subscription link
+                        </button>
+                        {linkErrors[subscription.id] && (
+                          <p className="text-xs text-rose-600 dark:text-rose-300">{linkErrors[subscription.id]}</p>
+                        )}
+                      </div>
                     )}
                     <p className="text-sm text-slate-500 dark:text-slate-400">{subscription.notes || 'No notes yet.'}</p>
                   </div>
