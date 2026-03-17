@@ -16,6 +16,7 @@ const initialFormState = {
   amount: '',
   billingCycle: 'Monthly',
   category: 'Streaming',
+  categoryDetail: '',
   nextPayment: '',
   currentPayment: '',
   link: '',
@@ -100,14 +101,73 @@ const normalizeLink = (value) => {
   return `https://${trimmed}`
 }
 
-const normalizeSubscription = (subscription) => ({
-  ...subscription,
-  currentPayment: subscription.currentPayment || '',
-  link: subscription.link || '',
-  statusChangedAt: subscription.statusChangedAt || '',
+const getCategoryLabel = (category, categoryDetail) => {
+  if (category !== 'Other') return category
+  const detail = categoryDetail.trim()
+  return detail ? `Other: ${detail}` : 'Other'
+}
+
+const normalizePayment = (payment) => ({
+  id: payment.id || `payment-${Date.now()}-${Math.random()}`,
+  date: toDateValue(payment.date),
+  amount: parseAmount(payment.amount),
 })
 
+const normalizeSubscription = (subscription) => {
+  const currentPayment = subscription.currentPayment || ''
+  const storedPayments = Array.isArray(subscription.payments)
+    ? subscription.payments.map(normalizePayment).filter((payment) => payment.date)
+    : []
+
+  const payments =
+    storedPayments.length > 0
+      ? storedPayments
+      : currentPayment
+        ? [
+            {
+              id: `legacy-${subscription.id || 'sub'}-${currentPayment}`,
+              date: toDateValue(currentPayment),
+              amount: parseAmount(subscription.amount),
+            },
+          ]
+        : []
+
+  return {
+    ...subscription,
+    currentPayment,
+    link: subscription.link || '',
+    categoryDetail: subscription.categoryDetail || '',
+    statusChangedAt: subscription.statusChangedAt || '',
+    payments,
+  }
+}
+
 const getTodayDate = () => new Date().toISOString().slice(0, 10)
+
+const syncPayments = (existingSubscription, currentPayment, amount) => {
+  const existingPayments = Array.isArray(existingSubscription?.payments) ? [...existingSubscription.payments] : []
+  if (!currentPayment) return existingPayments
+
+  const normalizedDate = toDateValue(currentPayment)
+  const existingIndex = existingPayments.findIndex((payment) => toDateValue(payment.date) === normalizedDate)
+
+  if (existingIndex >= 0) {
+    existingPayments[existingIndex] = {
+      ...existingPayments[existingIndex],
+      date: normalizedDate,
+      amount,
+    }
+    return existingPayments
+  }
+
+  existingPayments.push({
+    id: `payment-${Date.now()}`,
+    date: normalizedDate,
+    amount,
+  })
+
+  return existingPayments
+}
 
 export default function App() {
   const [subscriptions, setSubscriptions] = useState([])
@@ -145,6 +205,7 @@ export default function App() {
 
     const loadSubscriptions = async () => {
       try {
+        await store.load()
         const [storedSubscriptions, storedTheme] = await Promise.all([
           store.get('subscriptions'),
           store.get('themePreference'),
@@ -182,11 +243,15 @@ export default function App() {
     if (!isLoaded) return
 
     const persist = async () => {
-      await Promise.all([
-        store.set('subscriptions', subscriptions),
-        store.set('themePreference', themePreference),
-      ])
-      await store.save()
+      try {
+        await Promise.all([
+          store.set('subscriptions', subscriptions),
+          store.set('themePreference', themePreference),
+        ])
+        await store.save()
+      } catch {
+        // noop: keep UI responsive even if persistence fails
+      }
     }
 
     persist()
@@ -195,10 +260,8 @@ export default function App() {
   const filteredSubscriptions = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
     const filtered = subscriptions.filter((subscription) => {
-      const matchesQuery =
-        !normalizedQuery ||
-        subscription.name.toLowerCase().includes(normalizedQuery) ||
-        subscription.category.toLowerCase().includes(normalizedQuery)
+      const categoryLabel = getCategoryLabel(subscription.category, subscription.categoryDetail).toLowerCase()
+      const matchesQuery = !normalizedQuery || subscription.name.toLowerCase().includes(normalizedQuery) || categoryLabel.includes(normalizedQuery)
       const matchesStatus = statusFilter === 'All' || subscription.status === statusFilter
       const matchesCategory = categoryFilter === 'All' || subscription.category === categoryFilter
       return matchesQuery && matchesStatus && matchesCategory
@@ -213,12 +276,16 @@ export default function App() {
       return sum + monthlyCost
     }, 0)
 
-    const totalYearly = totalMonthly * 12
+    const totalLoggedSpend = subscriptions.reduce((sum, subscription) => {
+      const paymentTotal = (subscription.payments || []).reduce((paymentSum, payment) => paymentSum + parseAmount(payment.amount), 0)
+      return sum + paymentTotal
+    }, 0)
+
     const activeCount = subscriptions.filter((subscription) => subscription.status === 'Active').length
 
     return {
       totalMonthly,
-      totalYearly,
+      totalLoggedSpend,
       activeCount,
     }
   }, [subscriptions])
@@ -246,10 +313,26 @@ export default function App() {
       return
     }
 
+    if (name === 'category' && value !== 'Other') {
+      setFormState((prev) => ({
+        ...prev,
+        category: value,
+        categoryDetail: '',
+      }))
+      return
+    }
+
     setFormState((prev) => ({
       ...prev,
       [name]: value,
     }))
+  }
+
+  const handleDateChange = (event) => {
+    handleChange(event)
+    requestAnimationFrame(() => {
+      event.target.blur()
+    })
   }
 
   const handleSubmit = (event) => {
@@ -266,37 +349,45 @@ export default function App() {
       setErrorMessage('Please select a next payment date.')
       return
     }
-
-    const normalizedLink = normalizeLink(formState.link)
-
-    const newEntry = {
-      id: editingId ?? `sub-${Date.now()}`,
-      name: formState.name.trim(),
-      amount: parseAmount(formState.amount),
-      billingCycle: formState.billingCycle,
-      category: formState.category,
-      nextPayment: formState.nextPayment,
-      currentPayment: formState.currentPayment,
-      link: normalizedLink,
-      notes: formState.notes.trim(),
-      status: formState.status,
-      statusChangedAt: editingId ? getTodayDate() : '',
+    if (formState.category === 'Other' && !formState.categoryDetail.trim()) {
+      setErrorMessage('Please enter a custom category when choosing Other.')
+      return
     }
 
+    const normalizedLinkValue = normalizeLink(formState.link)
+    const parsedAmount = parseAmount(formState.amount)
+
     setSubscriptions((prev) => {
+      const existing = editingId ? prev.find((subscription) => subscription.id === editingId) : null
+      const nextEntry = {
+        id: editingId ?? `sub-${Date.now()}`,
+        name: formState.name.trim(),
+        amount: parsedAmount,
+        billingCycle: formState.billingCycle,
+        category: formState.category,
+        categoryDetail: formState.category === 'Other' ? formState.categoryDetail.trim() : '',
+        nextPayment: formState.nextPayment,
+        currentPayment: formState.currentPayment,
+        link: normalizedLinkValue,
+        notes: formState.notes.trim(),
+        status: formState.status,
+        statusChangedAt: editingId ? getTodayDate() : '',
+        payments: syncPayments(existing, formState.currentPayment, parsedAmount),
+      }
+
       if (editingId) {
-        const existing = prev.find((subscription) => subscription.id === editingId)
         return prev.map((subscription) =>
           subscription.id === editingId
             ? {
-                ...newEntry,
+                ...nextEntry,
                 statusChangedAt:
                   existing && existing.status !== formState.status ? getTodayDate() : existing?.statusChangedAt || '',
               }
             : subscription,
         )
       }
-      return [newEntry, ...prev]
+
+      return [nextEntry, ...prev]
     })
 
     resetForm()
@@ -309,6 +400,7 @@ export default function App() {
       amount: subscription.amount,
       billingCycle: subscription.billingCycle,
       category: subscription.category,
+      categoryDetail: subscription.categoryDetail || '',
       nextPayment: toDateValue(subscription.nextPayment),
       currentPayment: toDateValue(subscription.currentPayment),
       link: subscription.link || '',
@@ -375,8 +467,8 @@ export default function App() {
               <p className="text-2xl font-semibold text-slate-900 dark:text-slate-100">{currencyFormatter.format(metrics.totalMonthly)}</p>
             </div>
             <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
-              <p className="text-sm text-slate-500 dark:text-slate-400">Annual spend</p>
-              <p className="text-2xl font-semibold text-slate-900 dark:text-slate-100">{currencyFormatter.format(metrics.totalYearly)}</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400">Actual spend logged</p>
+              <p className="text-2xl font-semibold text-slate-900 dark:text-slate-100">{currencyFormatter.format(metrics.totalLoggedSpend)}</p>
             </div>
             <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
               <p className="text-sm text-slate-500 dark:text-slate-400">Active subscriptions</p>
@@ -451,7 +543,7 @@ export default function App() {
                       </span>
                     </div>
                     <div className="flex flex-wrap gap-3 text-sm text-slate-500 dark:text-slate-400">
-                      <span>{subscription.category}</span>
+                      <span>{getCategoryLabel(subscription.category, subscription.categoryDetail)}</span>
                       <span>•</span>
                       <span>{subscription.billingCycle}</span>
                       <span>•</span>
@@ -478,6 +570,9 @@ export default function App() {
                       <p className="text-xs text-slate-500 dark:text-slate-400">{getDueLabel(subscription.nextPayment)}</p>
                       {subscription.currentPayment && (
                         <p className="text-xs text-slate-500 dark:text-slate-400">Current payment: {toDateValue(subscription.currentPayment)}</p>
+                      )}
+                      {!!subscription.payments?.length && (
+                        <p className="text-xs text-slate-500 dark:text-slate-400">Logged payments: {subscription.payments.length}</p>
                       )}
                       {subscription.statusChangedAt && (
                         <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -589,6 +684,18 @@ export default function App() {
                     </select>
                   </div>
                 </div>
+                {formState.category === 'Other' && (
+                  <div>
+                    <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Custom category label</label>
+                    <input
+                      name="categoryDetail"
+                      className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
+                      value={formState.categoryDetail}
+                      onChange={handleChange}
+                      placeholder="e.g. Cloud storage"
+                    />
+                  </div>
+                )}
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
                     <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Next payment</label>
@@ -597,7 +704,7 @@ export default function App() {
                       type="date"
                       className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                       value={formState.nextPayment}
-                      onChange={handleChange}
+                      onChange={handleDateChange}
                     />
                   </div>
                   <div>
@@ -607,7 +714,7 @@ export default function App() {
                       type="date"
                       className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                       value={formState.currentPayment}
-                      onChange={handleChange}
+                      onChange={handleDateChange}
                     />
                   </div>
                 </div>
