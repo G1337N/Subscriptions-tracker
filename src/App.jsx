@@ -41,9 +41,17 @@ const getSystemTheme = () => {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
+const pad2 = (value) => String(value).padStart(2, '0')
+
+const formatDateLocal = (date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+
 const toDateValue = (value) => {
   if (!value) return ''
-  return new Date(value).toISOString().slice(0, 10)
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  return formatDateLocal(date)
 }
 
 const normalizeAmount = (value) => {
@@ -161,7 +169,7 @@ const normalizeSubscription = (subscription) => {
   }
 }
 
-const getTodayDate = () => new Date().toISOString().slice(0, 10)
+const getTodayDate = () => formatDateLocal(new Date())
 
 const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const weekDayLabels = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
@@ -214,7 +222,7 @@ const DatePicker = ({ name, value, onChange, placeholder }) => {
 
   const selectDate = (dayNumber) => {
     const date = new Date(year, month, dayNumber)
-    const nextValue = date.toISOString().slice(0, 10)
+    const nextValue = formatDateLocal(date)
     onChange({ target: { name, value: nextValue } })
     setViewDate(date)
     setIsOpen(false)
@@ -1012,7 +1020,10 @@ export default function App() {
                   <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Subscription link</label>
                   <input
                     name="link"
-                    type="url"
+                    type="text"
+                    inputMode="url"
+                    autoCapitalize="none"
+                    autoCorrect="off"
                     className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                     value={formState.link}
                     onChange={handleChange}
