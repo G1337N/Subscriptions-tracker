@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Store } from '@tauri-apps/plugin-store'
 
 const store = new Store('subscriptions.json')
+const localStorageStateKey = 'subscription-tracker.state.v1'
 
 const currencyFormatter = new Intl.NumberFormat(undefined, {
   style: 'currency',
@@ -144,6 +145,42 @@ const normalizeSubscription = (subscription) => {
 
 const getTodayDate = () => new Date().toISOString().slice(0, 10)
 
+const toPersistedSubscription = (subscription) => ({
+  id: subscription.id,
+  name: subscription.name || '',
+  amount: parseAmount(subscription.amount),
+  billingCycle: subscription.billingCycle || 'Monthly',
+  category: subscription.category || 'Other',
+  categoryDetail: subscription.categoryDetail || '',
+  nextPayment: toDateValue(subscription.nextPayment),
+  currentPayment: toDateValue(subscription.currentPayment),
+  link: subscription.link || '',
+  notes: subscription.notes || '',
+  status: statusOptions.includes(subscription.status) ? subscription.status : 'Active',
+  statusChangedAt: toDateValue(subscription.statusChangedAt),
+  payments: Array.isArray(subscription.payments)
+    ? subscription.payments.map(normalizePayment).filter((payment) => payment.date)
+    : [],
+})
+
+const toPersistedState = (subscriptions, themePreference) => ({
+  version: 1,
+  subscriptions: subscriptions.map(toPersistedSubscription),
+  themePreference: themeOptions.includes(themePreference) ? themePreference : 'system',
+})
+
+const parseLocalState = () => {
+  try {
+    const raw = window.localStorage.getItem(localStorageStateKey)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object') return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
 const syncPayments = (existingSubscription, currentPayment, amount) => {
   const existingPayments = Array.isArray(existingSubscription?.payments) ? [...existingSubscription.payments] : []
   if (!currentPayment) return existingPayments
@@ -181,6 +218,7 @@ export default function App() {
   const [themePreference, setThemePreference] = useState('system')
   const [systemTheme, setSystemTheme] = useState(getSystemTheme)
   const [isLoaded, setIsLoaded] = useState(false)
+  const [persistenceError, setPersistenceError] = useState('')
 
   const effectiveTheme = themePreference === 'system' ? systemTheme : themePreference
 
@@ -204,6 +242,8 @@ export default function App() {
     let mounted = true
 
     const loadSubscriptions = async () => {
+      let loadedFromStore = false
+
       try {
         await store.load()
         const [storedSubscriptions, storedTheme] = await Promise.all([
@@ -211,24 +251,36 @@ export default function App() {
           store.get('themePreference'),
         ])
 
-        if (mounted) {
-          if (Array.isArray(storedSubscriptions)) {
-            setSubscriptions(storedSubscriptions.map(normalizeSubscription))
-          } else {
-            setSubscriptions([])
-          }
+        if (!mounted) return
 
-          if (typeof storedTheme === 'string' && themeOptions.includes(storedTheme)) {
-            setThemePreference(storedTheme)
-          }
+        if (Array.isArray(storedSubscriptions)) {
+          setSubscriptions(storedSubscriptions.map(normalizeSubscription))
+          loadedFromStore = true
+        }
 
-          setIsLoaded(true)
+        if (typeof storedTheme === 'string' && themeOptions.includes(storedTheme)) {
+          setThemePreference(storedTheme)
+          loadedFromStore = true
         }
       } catch {
-        if (mounted) {
-          setSubscriptions([])
-          setIsLoaded(true)
+        // fall back to localStorage below
+      }
+
+      if (!loadedFromStore && mounted) {
+        const localState = parseLocalState()
+        if (localState) {
+          if (Array.isArray(localState.subscriptions)) {
+            setSubscriptions(localState.subscriptions.map(normalizeSubscription))
+          }
+          if (typeof localState.themePreference === 'string' && themeOptions.includes(localState.themePreference)) {
+            setThemePreference(localState.themePreference)
+          }
+          setPersistenceError('Tauri store unavailable. Loaded data from local fallback storage.')
         }
+      }
+
+      if (mounted) {
+        setIsLoaded(true)
       }
     }
 
@@ -243,15 +295,42 @@ export default function App() {
     if (!isLoaded) return
 
     const persist = async () => {
+      const persistedState = toPersistedState(subscriptions, themePreference)
+      let storeError = null
+      let localStorageError = null
+
       try {
         await Promise.all([
-          store.set('subscriptions', subscriptions),
-          store.set('themePreference', themePreference),
+          store.set('subscriptions', persistedState.subscriptions),
+          store.set('themePreference', persistedState.themePreference),
         ])
         await store.save()
-      } catch {
-        // noop: keep UI responsive even if persistence fails
+      } catch (error) {
+        storeError = error
       }
+
+      try {
+        window.localStorage.setItem(localStorageStateKey, JSON.stringify(persistedState))
+      } catch (error) {
+        localStorageError = error
+      }
+
+      if (storeError && localStorageError) {
+        setPersistenceError('Persistence failed: unable to save to app storage and local fallback.')
+        return
+      }
+
+      if (storeError) {
+        setPersistenceError('App storage save failed. Changes are kept in local fallback storage.')
+        return
+      }
+
+      if (localStorageError) {
+        setPersistenceError('Fallback storage save failed. App storage is still active.')
+        return
+      }
+
+      setPersistenceError('')
     }
 
     persist()
@@ -445,6 +524,12 @@ export default function App() {
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-10">
+        {persistenceError && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-400/40 dark:bg-amber-500/10 dark:text-amber-200">
+            {persistenceError}
+          </div>
+        )}
+
         <header className="flex flex-col gap-4 rounded-2xl bg-white px-8 py-6 shadow-soft dark:bg-slate-900 dark:shadow-none dark:ring-1 dark:ring-slate-800">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex flex-col gap-2">
