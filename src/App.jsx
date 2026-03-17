@@ -1,7 +1,6 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Store } from '@tauri-apps/plugin-store'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { load } from '@tauri-apps/plugin-store'
 
-const store = new Store('subscriptions.json')
 const localStorageStateKey = 'subscription-tracker.state.v1'
 const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 
@@ -146,18 +145,141 @@ const normalizeSubscription = (subscription) => {
 
 const getTodayDate = () => new Date().toISOString().slice(0, 10)
 
-const addMonthsToDateValue = (dateValue, monthsToAdd) => {
-  const baseDate = dateValue ? new Date(`${dateValue}T00:00:00`) : new Date()
-  const currentDay = baseDate.getDate()
-  const shiftedDate = new Date(baseDate)
+const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+const weekDayLabels = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
 
-  shiftedDate.setDate(1)
-  shiftedDate.setMonth(shiftedDate.getMonth() + monthsToAdd)
+const startOfDay = (value) => {
+  const date = new Date(value)
+  date.setHours(0, 0, 0, 0)
+  return date
+}
 
-  const lastDayOfTargetMonth = new Date(shiftedDate.getFullYear(), shiftedDate.getMonth() + 1, 0).getDate()
-  shiftedDate.setDate(Math.min(currentDay, lastDayOfTargetMonth))
+const DatePicker = ({ name, value, onChange, placeholder }) => {
+  const [isOpen, setIsOpen] = useState(false)
+  const containerRef = useRef(null)
+  const selectedDate = value ? startOfDay(`${value}T00:00:00`) : null
+  const [viewDate, setViewDate] = useState(selectedDate || startOfDay(new Date()))
 
-  return shiftedDate.toISOString().slice(0, 10)
+  useEffect(() => {
+    if (!isOpen) return
+
+    const handleOutsideClick = (event) => {
+      if (!containerRef.current?.contains(event.target)) {
+        setIsOpen(false)
+      }
+    }
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        setIsOpen(false)
+      }
+    }
+
+    document.addEventListener('mousedown', handleOutsideClick)
+    document.addEventListener('keydown', handleEscape)
+
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick)
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [isOpen])
+
+  const year = viewDate.getFullYear()
+  const month = viewDate.getMonth()
+  const firstDayIndex = (new Date(year, month, 1).getDay() + 6) % 7
+  const daysInMonth = new Date(year, month + 1, 0).getDate()
+  const dayCells = Array.from({ length: 42 }, (_, index) => {
+    const dayNumber = index - firstDayIndex + 1
+    if (dayNumber < 1 || dayNumber > daysInMonth) return null
+    return dayNumber
+  })
+
+  const selectDate = (dayNumber) => {
+    const date = new Date(year, month, dayNumber)
+    const nextValue = date.toISOString().slice(0, 10)
+    onChange({ target: { name, value: nextValue } })
+    setViewDate(date)
+    setIsOpen(false)
+  }
+
+  const togglePicker = () => {
+    if (!isOpen) {
+      setViewDate(selectedDate || startOfDay(new Date()))
+    }
+    setIsOpen((open) => !open)
+  }
+
+  return (
+    <div className="relative" ref={containerRef}>
+      <button
+        type="button"
+        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
+        onClick={togglePicker}
+      >
+        {value || placeholder}
+      </button>
+
+      {isOpen && (
+        <div className="absolute z-20 mt-2 w-[18rem] rounded-xl border border-slate-200 bg-white p-3 shadow-lg dark:border-slate-700 dark:bg-slate-900">
+          <div className="mb-2 flex items-center justify-between gap-1 text-xs font-semibold">
+            <button type="button" className="rounded px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => setViewDate(new Date(year, month - 1, 1))}>
+              ←
+            </button>
+            <span className="text-sm">{monthLabels[month]} {year}</span>
+            <button type="button" className="rounded px-2 py-1 hover:bg-slate-100 dark:hover:bg-slate-800" onClick={() => setViewDate(new Date(year, month + 1, 1))}>
+              →
+            </button>
+          </div>
+
+          <div className="mb-2 flex items-center justify-center gap-2 text-xs">
+            <button type="button" className="rounded border border-slate-200 px-2 py-1 hover:border-brand-300 dark:border-slate-700" onClick={() => setViewDate(new Date(year - 5, month, 1))}>-5Y</button>
+            <button type="button" className="rounded border border-slate-200 px-2 py-1 hover:border-brand-300 dark:border-slate-700" onClick={() => setViewDate(new Date(year + 5, month, 1))}>+5Y</button>
+          </div>
+
+          <div className="mb-3 grid grid-cols-4 gap-1 text-xs">
+            {monthLabels.map((label, monthIndex) => (
+              <button
+                key={label}
+                type="button"
+                className={`rounded px-1 py-1.5 ${monthIndex === month ? 'bg-brand-500 text-white' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                onClick={() => setViewDate(new Date(year, monthIndex, 1))}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="grid grid-cols-7 gap-1 text-center text-xs text-slate-500 dark:text-slate-400">
+            {weekDayLabels.map((day) => (
+              <span key={day}>{day}</span>
+            ))}
+          </div>
+          <div className="mt-1 grid grid-cols-7 gap-1 text-sm">
+            {dayCells.map((dayNumber, index) => {
+              if (!dayNumber) return <span key={`empty-${index}`} className="h-8" />
+
+              const isSelected =
+                selectedDate &&
+                selectedDate.getFullYear() === year &&
+                selectedDate.getMonth() === month &&
+                selectedDate.getDate() === dayNumber
+
+              return (
+                <button
+                  key={`${year}-${month}-${dayNumber}`}
+                  type="button"
+                  className={`h-8 rounded ${isSelected ? 'bg-brand-500 text-white' : 'hover:bg-slate-100 dark:hover:bg-slate-800'}`}
+                  onClick={() => selectDate(dayNumber)}
+                >
+                  {dayNumber}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  )
 }
 
 const toPersistedSubscription = (subscription) => ({
@@ -233,8 +355,9 @@ export default function App() {
   const [themePreference, setThemePreference] = useState('system')
   const [systemTheme, setSystemTheme] = useState(getSystemTheme)
   const [isLoaded, setIsLoaded] = useState(false)
-  const [storeAccessible, setStoreAccessible] = useState(true)
+  const [storeAccessible, setStoreAccessible] = useState(false)
   const [persistenceError, setPersistenceError] = useState('')
+  const storeRef = useRef(null)
 
   const effectiveTheme = themePreference === 'system' ? systemTheme : themePreference
 
@@ -261,28 +384,31 @@ export default function App() {
       let canUseStore = false
       let hasAnyStoreData = false
 
-      try {
-        await store.load()
-        canUseStore = true
+      if (isTauriRuntime) {
+        try {
+          const appStore = await load('subscriptions.json')
+          storeRef.current = appStore
+          canUseStore = true
 
-        const [storedSubscriptions, storedTheme] = await Promise.all([
-          store.get('subscriptions'),
-          store.get('themePreference'),
-        ])
+          const [storedSubscriptions, storedTheme] = await Promise.all([
+            appStore.get('subscriptions'),
+            appStore.get('themePreference'),
+          ])
 
-        if (!mounted) return
+          if (!mounted) return
 
-        if (Array.isArray(storedSubscriptions)) {
-          setSubscriptions(storedSubscriptions.map(normalizeSubscription))
-          hasAnyStoreData = true
+          if (Array.isArray(storedSubscriptions)) {
+            setSubscriptions(storedSubscriptions.map(normalizeSubscription))
+            hasAnyStoreData = true
+          }
+
+          if (typeof storedTheme === 'string' && themeOptions.includes(storedTheme)) {
+            setThemePreference(storedTheme)
+            hasAnyStoreData = true
+          }
+        } catch {
+          canUseStore = false
         }
-
-        if (typeof storedTheme === 'string' && themeOptions.includes(storedTheme)) {
-          setThemePreference(storedTheme)
-          hasAnyStoreData = true
-        }
-      } catch {
-        canUseStore = false
       }
 
       if (mounted) {
@@ -298,10 +424,6 @@ export default function App() {
         if (typeof localState.themePreference === 'string' && themeOptions.includes(localState.themePreference)) {
           setThemePreference(localState.themePreference)
         }
-      }
-
-      if (mounted && !canUseStore && localState && isTauriRuntime) {
-        setPersistenceError('App storage unavailable. Loaded data from local fallback storage.')
       }
 
       if (mounted) {
@@ -324,13 +446,13 @@ export default function App() {
       let storeError = null
       let localStorageError = null
 
-      if (storeAccessible) {
+      if (storeAccessible && storeRef.current) {
         try {
           await Promise.all([
-            store.set('subscriptions', persistedState.subscriptions),
-            store.set('themePreference', persistedState.themePreference),
+            storeRef.current.set('subscriptions', persistedState.subscriptions),
+            storeRef.current.set('themePreference', persistedState.themePreference),
           ])
-          await store.save()
+          await storeRef.current.save()
         } catch (error) {
           storeError = error
         }
@@ -342,28 +464,8 @@ export default function App() {
         localStorageError = error
       }
 
-      if (storeError && localStorageError) {
-        setPersistenceError('Persistence failed: unable to save to app storage and local fallback.')
-        return
-      }
-
-      if (storeError) {
-        setPersistenceError('App storage save failed. Changes are kept in local fallback storage.')
-        return
-      }
-
-      if (!storeAccessible && localStorageError) {
-        setPersistenceError('Fallback storage save failed.')
-        return
-      }
-
-      if (localStorageError) {
-        setPersistenceError('Fallback storage save failed. App storage is still active.')
-        return
-      }
-
-      if (!storeAccessible && isTauriRuntime) {
-        setPersistenceError('App storage unavailable. Changes are saved in local fallback storage.')
+      if ((storeAccessible && storeError && localStorageError) || (!storeAccessible && localStorageError)) {
+        setPersistenceError('Persistence failed: unable to save your data.')
         return
       }
 
@@ -446,13 +548,6 @@ export default function App() {
 
   const handleDateChange = (event) => {
     handleChange(event)
-  }
-
-  const handleShiftDate = (fieldName, monthDelta) => {
-    setFormState((prev) => ({
-      ...prev,
-      [fieldName]: addMonthsToDateValue(prev[fieldName], monthDelta),
-    }))
   }
 
   const handleSubmit = (event) => {
@@ -825,54 +920,24 @@ export default function App() {
                 <div className="grid gap-3 md:grid-cols-2">
                   <div>
                     <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Next payment</label>
-                    <div className="mt-1 flex items-center gap-2">
-                      <button
-                        type="button"
-                        className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300"
-                        onClick={() => handleShiftDate('nextPayment', -1)}
-                      >
-                        −1M
-                      </button>
-                      <input
+                    <div className="mt-1">
+                      <DatePicker
                         name="nextPayment"
-                        type="date"
-                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                         value={formState.nextPayment}
                         onChange={handleDateChange}
+                        placeholder="Select date"
                       />
-                      <button
-                        type="button"
-                        className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300"
-                        onClick={() => handleShiftDate('nextPayment', 1)}
-                      >
-                        +1M
-                      </button>
                     </div>
                   </div>
                   <div>
                     <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Current payment</label>
-                    <div className="mt-1 flex items-center gap-2">
-                      <button
-                        type="button"
-                        className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300"
-                        onClick={() => handleShiftDate('currentPayment', -1)}
-                      >
-                        −1M
-                      </button>
-                      <input
+                    <div className="mt-1">
+                      <DatePicker
                         name="currentPayment"
-                        type="date"
-                        className="w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"
                         value={formState.currentPayment}
                         onChange={handleDateChange}
+                        placeholder="Select date"
                       />
-                      <button
-                        type="button"
-                        className="rounded-lg border border-slate-200 px-2 py-2 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300"
-                        onClick={() => handleShiftDate('currentPayment', 1)}
-                      >
-                        +1M
-                      </button>
                     </div>
                   </div>
                 </div>
