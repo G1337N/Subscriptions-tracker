@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { open as openExternal } from '@tauri-apps/plugin-shell'
 import { load } from '@tauri-apps/plugin-store'
+import { formatDateLocal, getCleanPayments, getDaysLeft, getTotalLoggedSpend, parseAmount, renewSubscription, toDateValue } from './subscriptionLogic'
 
 const localStorageStateKey = 'subscription-tracker.state.v1'
 const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -41,29 +42,11 @@ const getSystemTheme = () => {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
-const pad2 = (value) => String(value).padStart(2, '0')
-
-const formatDateLocal = (date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
-
-const toDateValue = (value) => {
-  if (!value) return ''
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value
-
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return ''
-  return formatDateLocal(date)
-}
-
 const normalizeAmount = (value) => {
   if (value === '') return ''
   const numberValue = Number(value)
   if (Number.isNaN(numberValue)) return ''
   return Math.max(numberValue, 0)
-}
-
-const parseAmount = (value) => {
-  const numberValue = Number(value)
-  return Number.isNaN(numberValue) ? 0 : numberValue
 }
 
 const calculateMonthlyCost = (amount, billingCycle) => {
@@ -134,40 +117,14 @@ const getCategoryLabel = (category, categoryDetail) => {
   return detail ? `Other: ${detail}` : 'Other'
 }
 
-const normalizePayment = (payment) => ({
-  id: payment.id || `payment-${Date.now()}-${Math.random()}`,
-  date: toDateValue(payment.date),
-  amount: parseAmount(payment.amount),
+const normalizeSubscription = (subscription) => ({
+  ...subscription,
+  currentPayment: subscription.currentPayment || '',
+  link: subscription.link || '',
+  categoryDetail: subscription.categoryDetail || '',
+  statusChangedAt: subscription.statusChangedAt || '',
+  payments: getCleanPayments(subscription),
 })
-
-const normalizeSubscription = (subscription) => {
-  const currentPayment = subscription.currentPayment || ''
-  const storedPayments = Array.isArray(subscription.payments)
-    ? subscription.payments.map(normalizePayment).filter((payment) => payment.date)
-    : []
-
-  const payments =
-    storedPayments.length > 0
-      ? storedPayments
-      : currentPayment
-        ? [
-            {
-              id: `legacy-${subscription.id || 'sub'}-${currentPayment}`,
-              date: toDateValue(currentPayment),
-              amount: parseAmount(subscription.amount),
-            },
-          ]
-        : []
-
-  return {
-    ...subscription,
-    currentPayment,
-    link: subscription.link || '',
-    categoryDetail: subscription.categoryDetail || '',
-    statusChangedAt: subscription.statusChangedAt || '',
-    payments,
-  }
-}
 
 const getTodayDate = () => formatDateLocal(new Date())
 
@@ -321,9 +278,7 @@ const toPersistedSubscription = (subscription) => ({
   notes: subscription.notes || '',
   status: statusOptions.includes(subscription.status) ? subscription.status : 'Active',
   statusChangedAt: toDateValue(subscription.statusChangedAt),
-  payments: Array.isArray(subscription.payments)
-    ? subscription.payments.map(normalizePayment).filter((payment) => payment.date)
-    : [],
+  payments: getCleanPayments(subscription),
 })
 
 const toPersistedState = (subscriptions, themePreference) => ({
@@ -344,31 +299,6 @@ const parseLocalState = () => {
   }
 }
 
-const syncPayments = (existingSubscription, currentPayment, amount) => {
-  const existingPayments = Array.isArray(existingSubscription?.payments) ? [...existingSubscription.payments] : []
-  if (!currentPayment) return existingPayments
-
-  const normalizedDate = toDateValue(currentPayment)
-  const existingIndex = existingPayments.findIndex((payment) => toDateValue(payment.date) === normalizedDate)
-
-  if (existingIndex >= 0) {
-    existingPayments[existingIndex] = {
-      ...existingPayments[existingIndex],
-      date: normalizedDate,
-      amount,
-    }
-    return existingPayments
-  }
-
-  existingPayments.push({
-    id: `payment-${Date.now()}`,
-    date: normalizedDate,
-    amount,
-  })
-
-  return existingPayments
-}
-
 export default function App() {
   const [subscriptions, setSubscriptions] = useState([])
   const [formState, setFormState] = useState(initialFormState)
@@ -384,6 +314,10 @@ export default function App() {
   const [isLoaded, setIsLoaded] = useState(false)
   const [storeAccessible, setStoreAccessible] = useState(false)
   const [persistenceError, setPersistenceError] = useState('')
+  const [todayValue, setTodayValue] = useState(getTodayDate)
+  const [renewingSubscriptionId, setRenewingSubscriptionId] = useState(null)
+  const [renewForm, setRenewForm] = useState({ amountPaid: '', paymentDate: getTodayDate(), newExpiryDate: '' })
+  const [renewError, setRenewError] = useState('')
   const storeRef = useRef(null)
 
   const effectiveTheme = themePreference === 'system' ? systemTheme : themePreference
@@ -403,6 +337,13 @@ export default function App() {
     root.classList.toggle('dark', effectiveTheme === 'dark')
     root.style.colorScheme = effectiveTheme === 'dark' ? 'dark' : 'light'
   }, [effectiveTheme])
+
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      setTodayValue(getTodayDate())
+    }, 60 * 60 * 1000)
+    return () => window.clearInterval(interval)
+  }, [])
 
   useEffect(() => {
     let mounted = true
@@ -521,10 +462,7 @@ export default function App() {
       return sum + monthlyCost
     }, 0)
 
-    const totalLoggedSpend = subscriptions.reduce((sum, subscription) => {
-      const paymentTotal = (subscription.payments || []).reduce((paymentSum, payment) => paymentSum + parseAmount(payment.amount), 0)
-      return sum + paymentTotal
-    }, 0)
+    const totalLoggedSpend = getTotalLoggedSpend(subscriptions)
 
     const activeCount = subscriptions.filter((subscription) => subscription.status === 'Active').length
 
@@ -616,7 +554,12 @@ export default function App() {
         notes: formState.notes.trim(),
         status: formState.status,
         statusChangedAt: editingId ? getTodayDate() : '',
-        payments: syncPayments(existing, formState.currentPayment, parsedAmount),
+        payments: getCleanPayments({
+          ...(existing || {}),
+          payments: existing?.payments || [],
+          currentPayment: formState.currentPayment,
+          amount: parsedAmount,
+        }),
       }
 
       if (editingId) {
@@ -674,22 +617,59 @@ export default function App() {
     }
   }
 
-  const handleStatusToggle = (subscription) => {
-    const nextStatus = subscription.status === 'Active' ? 'Paused' : 'Active'
-    const statusDate = prompt(`${nextStatus} date (YYYY-MM-DD):`, getTodayDate())
-    if (statusDate === null) return
+  const handlePause = (subscription) => {
+    if (subscription.status !== 'Active') return
 
     setSubscriptions((prev) =>
       prev.map((item) =>
         item.id === subscription.id
           ? {
               ...item,
-              status: nextStatus,
-              statusChangedAt: statusDate || getTodayDate(),
+              status: 'Paused',
+              statusChangedAt: getTodayDate(),
             }
           : item,
       ),
     )
+  }
+
+  const handleOpenRenew = (subscription) => {
+    setRenewingSubscriptionId(subscription.id)
+    setRenewError('')
+    const defaultRenewalDate = toDateValue(subscription.nextPayment) || getTodayDate()
+    setRenewForm({
+      amountPaid: String(subscription.amount || ''),
+      paymentDate: defaultRenewalDate,
+      newExpiryDate: defaultRenewalDate,
+    })
+  }
+
+  const handleRenewSubmit = (event) => {
+    event.preventDefault()
+    if (!renewForm.amountPaid || !renewForm.paymentDate || !renewForm.newExpiryDate) {
+      setRenewError('Please complete all renewal fields.')
+      return
+    }
+
+    if (new Date(renewForm.newExpiryDate) < new Date(renewForm.paymentDate)) {
+      setRenewError('New expiry date should be on or after the renewal payment date.')
+      return
+    }
+
+    setSubscriptions((prev) =>
+      prev.map((item) =>
+        item.id === renewingSubscriptionId
+          ? renewSubscription(item, {
+              amountPaid: renewForm.amountPaid,
+              paymentDate: renewForm.paymentDate,
+              newExpiryDate: renewForm.newExpiryDate,
+            })
+          : item,
+      ),
+    )
+
+    setRenewingSubscriptionId(null)
+    setRenewError('')
   }
 
   const handleThemeToggle = () => {
@@ -864,24 +844,30 @@ export default function App() {
                       <p className="text-xs uppercase tracking-wide text-slate-400 dark:text-slate-500">Next payment</p>
                       <p className="text-base font-semibold">{toDateValue(subscription.nextPayment)}</p>
                       <p className="text-xs text-slate-500 dark:text-slate-400">{getDueLabel(subscription.nextPayment)}</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        {getDaysLeft(subscription.nextPayment, todayValue) > 0
+                          ? `${getDaysLeft(subscription.nextPayment, todayValue)} days left`
+                          : 'Expired'}
+                      </p>
                       {subscription.currentPayment && (
                         <p className="text-xs text-slate-500 dark:text-slate-400">Current payment: {toDateValue(subscription.currentPayment)}</p>
                       )}
-                      {!!subscription.payments?.length && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400">Logged payments: {subscription.payments.length}</p>
-                      )}
-                      {subscription.statusChangedAt && (
-                        <p className="text-xs text-slate-500 dark:text-slate-400">
-                          {subscription.status} on {toDateValue(subscription.statusChangedAt)}
-                        </p>
-                      )}
+                      <p className="text-xs text-slate-500 dark:text-slate-400">Logged payments: {getCleanPayments(subscription).length}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <button
-                        className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300"
-                        onClick={() => handleStatusToggle(subscription)}
+                        className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300"
+                        onClick={() => handlePause(subscription)}
+                        disabled={subscription.status !== 'Active'}
                       >
-                        {subscription.status === 'Active' ? 'Pause with date' : 'Activate with date'}
+                        Pause
+                      </button>
+                      <button
+                        className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300"
+                        onClick={() => handleOpenRenew(subscription)}
+                        disabled={subscription.status === 'Cancelled'}
+                      >
+                        Renew
                       </button>
                       <button
                         className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300"
@@ -1090,6 +1076,68 @@ export default function App() {
             </div>
           </aside>
         </section>
+
+        {renewingSubscriptionId && (
+          <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/40 px-4">
+            <form
+              onSubmit={handleRenewSubmit}
+              className="w-full max-w-md rounded-2xl bg-white p-5 shadow-soft dark:bg-slate-900 dark:ring-1 dark:ring-slate-800"
+            >
+              <h3 className="text-lg font-semibold">Renew subscription</h3>
+              <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">Log the renewal payment and set the new expiry date.</p>
+              <div className="mt-4 space-y-3">
+                <div>
+                  <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Amount paid</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-800"
+                    value={renewForm.amountPaid}
+                    onChange={(event) => setRenewForm((prev) => ({ ...prev, amountPaid: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-600 dark:text-slate-300">Renewal payment date</label>
+                  <div className="mt-1">
+                    <DatePicker
+                      name="paymentDate"
+                      value={renewForm.paymentDate}
+                      onChange={(event) => setRenewForm((prev) => ({ ...prev, paymentDate: event.target.value }))}
+                      placeholder="Select date"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="text-sm font-medium text-slate-600 dark:text-slate-300">New expiry date</label>
+                  <div className="mt-1">
+                    <DatePicker
+                      name="newExpiryDate"
+                      value={renewForm.newExpiryDate}
+                      onChange={(event) => setRenewForm((prev) => ({ ...prev, newExpiryDate: event.target.value }))}
+                      placeholder="Select date"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {renewError && <p className="mt-3 text-sm text-rose-600 dark:text-rose-300">{renewError}</p>}
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 dark:border-slate-700 dark:text-slate-300"
+                  onClick={() => setRenewingSubscriptionId(null)}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="rounded-full bg-brand-500 px-4 py-2 text-sm font-semibold text-white hover:bg-brand-600">
+                  Save renewal
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
       </div>
     </div>
   )
