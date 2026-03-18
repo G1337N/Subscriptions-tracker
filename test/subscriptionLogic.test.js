@@ -9,6 +9,7 @@ import {
   getMonthlySpendCsv,
   getTotalLoggedSpend,
   renewSubscription,
+  sortSubscriptions,
 } from '../src/subscriptionLogic.js'
 
 test('getTotalLoggedSpend sums only unique logged payments', () => {
@@ -80,6 +81,22 @@ test('getDueWindowSubscriptions returns only active items due within the selecte
     dueIn30.map((item) => item.id),
     ['s1', 's2', 's3'],
   )
+})
+
+test('sortSubscriptions supports category grouping then name', () => {
+  const subscriptions = [
+    { id: 's1', name: 'Zoom', category: 'Productivity', categoryDetail: '' },
+    { id: 's2', name: 'Apple TV+', category: 'Streaming', categoryDetail: '' },
+    { id: 's3', name: 'Notion', category: 'Productivity', categoryDetail: '' },
+    { id: 's4', name: 'CloudBox', category: 'Other', categoryDetail: 'Storage' },
+  ]
+
+  const sorted = sortSubscriptions(subscriptions, 'category', {
+    categoryLabelResolver: (subscription) =>
+      subscription.category === 'Other' ? `Other: ${subscription.categoryDetail}` : subscription.category,
+  })
+
+  assert.deepEqual(sorted.map((item) => item.id), ['s4', 's3', 's1', 's2'])
 })
 
 test('getMonthlyActualSpend aggregates logged payments for selected range with category breakdown', () => {

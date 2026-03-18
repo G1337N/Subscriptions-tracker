@@ -79,6 +79,30 @@ const defaultCategoryLabel = (subscription) => {
   return detail ? `Other: ${detail}` : 'Other'
 }
 
+export const sortSubscriptions = (items, sortKey, options = {}) => {
+  const resolveCategoryLabel = typeof options.categoryLabelResolver === 'function'
+    ? options.categoryLabelResolver
+    : defaultCategoryLabel
+
+  const sorted = [...items]
+
+  switch (sortKey) {
+    case 'name':
+      return sorted.sort((a, b) => a.name.localeCompare(b.name))
+    case 'amount':
+      return sorted.sort((a, b) => a.amount - b.amount)
+    case 'category':
+      return sorted.sort((a, b) => {
+        const categoryComparison = resolveCategoryLabel(a).localeCompare(resolveCategoryLabel(b))
+        if (categoryComparison !== 0) return categoryComparison
+        return a.name.localeCompare(b.name)
+      })
+    case 'nextPayment':
+      return sorted.sort((a, b) => new Date(a.nextPayment) - new Date(b.nextPayment))
+    default:
+      return sorted.sort((a, b) => new Date(a.nextPayment) - new Date(b.nextPayment))
+  }
+}
 
 export const categoryColorPalette = ['#0ea5e9', '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6']
 

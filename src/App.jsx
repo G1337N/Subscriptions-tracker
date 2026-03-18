@@ -13,6 +13,7 @@ import {
   getTotalLoggedSpend,
   parseAmount,
   renewSubscription,
+  sortSubscriptions,
   toDateValue,
 } from './subscriptionLogic'
 
@@ -72,20 +73,6 @@ const calculateMonthlyCost = (amount, billingCycle) => {
       return amount * 4.33
     default:
       return amount
-  }
-}
-
-const sortSubscriptions = (items, sortKey) => {
-  const sorted = [...items]
-  switch (sortKey) {
-    case 'name':
-      return sorted.sort((a, b) => a.name.localeCompare(b.name))
-    case 'amount':
-      return sorted.sort((a, b) => a.amount - b.amount)
-    case 'nextPayment':
-      return sorted.sort((a, b) => new Date(a.nextPayment) - new Date(b.nextPayment))
-    default:
-      return sorted.sort((a, b) => new Date(a.nextPayment) - new Date(b.nextPayment))
   }
 }
 
@@ -488,15 +475,19 @@ export default function App() {
       return matchesQuery && matchesStatus && matchesCategory
     })
 
+    const sortOptions = {
+      categoryLabelResolver: (subscription) => getCategoryLabel(subscription.category, subscription.categoryDetail),
+    }
+
     if (dueWindowFilter === '7d') {
-      return sortSubscriptions(getDueWindowSubscriptions(filtered, 7, todayValue), sortKey)
+      return sortSubscriptions(getDueWindowSubscriptions(filtered, 7, todayValue), sortKey, sortOptions)
     }
 
     if (dueWindowFilter === '30d') {
-      return sortSubscriptions(getDueWindowSubscriptions(filtered, 30, todayValue), sortKey)
+      return sortSubscriptions(getDueWindowSubscriptions(filtered, 30, todayValue), sortKey, sortOptions)
     }
 
-    return sortSubscriptions(filtered, sortKey)
+    return sortSubscriptions(filtered, sortKey, sortOptions)
   }, [subscriptions, query, statusFilter, categoryFilter, dueWindowFilter, sortKey, todayValue])
 
   const metrics = useMemo(() => {
@@ -840,42 +831,19 @@ export default function App() {
     }
   }
 
-  const handleExportMonthlySpend = async () => {
+  const handleExportMonthlySpend = () => {
     if (monthlyActualSpend.length === 0) return
 
     const csv = getMonthlySpendCsv(monthlyActualSpend)
     const fileName = `spend-history-${analyticsRangeMonths}m.csv`
+    const href = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`
 
-    if (isTauriRuntime) {
-      try {
-        const [{ save }, { writeTextFile }] = await Promise.all([
-          import('@tauri-apps/plugin-dialog'),
-          import('@tauri-apps/plugin-fs'),
-        ])
-
-        const selectedPath = await save({
-          defaultPath: fileName,
-          filters: [{ name: 'CSV', extensions: ['csv'] }],
-        })
-
-        if (selectedPath) {
-          await writeTextFile(selectedPath, csv)
-          return
-        }
-      } catch {
-        // fallback to anchor download for environments where plugins are unavailable
-      }
-    }
-
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
-    const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
-    anchor.href = url
+    anchor.href = href
     anchor.download = fileName
     document.body.appendChild(anchor)
     anchor.click()
     document.body.removeChild(anchor)
-    URL.revokeObjectURL(url)
   }
 
   const handleMonthClick = (monthKey) => {
@@ -1143,6 +1111,7 @@ export default function App() {
                   <option value="nextPayment">Sort by next payment</option>
                   <option value="name">Sort by name</option>
                   <option value="amount">Sort by cost</option>
+                  <option value="category">Sort by category</option>
                 </select>
               </div>
             </div>
