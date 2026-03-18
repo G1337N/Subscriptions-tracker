@@ -41,30 +41,42 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Download Windows installer
         uses: actions/download-artifact@v4
         with:
           name: windows-nsis-installer
           path: installer
 
-      - name: Generate changelog from commits
-        id: changelog
+      - name: Generate release info
+        id: release_info
         run: |
           TAG="v$(date +'%Y.%m.%d')"
-          BODY="## Windows Installer\n\nDownload the latest `.exe` and run it to install.\n\n### Changes since last release\n\n$(git log --oneline -20 | head -10 | sed 's/^/ - /')"
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "body<<EOF" >> $GITHUB_OUTPUT
-          echo "$BODY" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          echo "tag_name=$TAG" >> $GITHUB_OUTPUT
+          echo "release_name=$TAG" >> $GITHUB_OUTPUT
+
+          BODY_CHANGES=$(git log --oneline -10 | sed 's/^/ - /')
+          BODY="## Windows Installer
+
+Download the latest installer and run it to install.
+
+### Changes since last release
+
+${BODY_CHANGES}"
+          printf '%s' "$BODY" > release_body.md
+          echo "body_path=release_body.md" >> $GITHUB_OUTPUT
 
       - name: Create or update release
         uses: softprops/action-gh-release@v2
         with:
-          tag: ${{ steps.changelog.outputs.tag }}
-          name: ${{ steps.changelog.outputs.tag }}
-          body: ${{ steps.changelog.outputs.body }}
+          tag_name: ${{ steps.release_info.outputs.tag_name }}
+          name: ${{ steps.release_info.outputs.release_name }}
+          body_path: ${{ steps.release_info.outputs.body_path }}
           files: installer/*.exe
           draft: false
           prerelease: false
+          overwrite: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
