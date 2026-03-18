@@ -1,7 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { open as openExternal } from '@tauri-apps/plugin-shell'
 import { load } from '@tauri-apps/plugin-store'
-import { formatDateLocal, getCleanPayments, getDaysLeft, getTotalLoggedSpend, parseAmount, renewSubscription, toDateValue } from './subscriptionLogic'
+import {
+  formatDateLocal,
+  getCleanPayments,
+  getDaysLeft,
+  getDueWindowSubscriptions,
+  getMonthlyActualSpend,
+  getTotalLoggedSpend,
+  parseAmount,
+  renewSubscription,
+  toDateValue,
+} from './subscriptionLogic'
 
 const localStorageStateKey = 'subscription-tracker.state.v1'
 const isTauriRuntime = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
@@ -307,6 +317,7 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [statusFilter, setStatusFilter] = useState('All')
   const [categoryFilter, setCategoryFilter] = useState('All')
+  const [dueWindowFilter, setDueWindowFilter] = useState('all')
   const [sortKey, setSortKey] = useState('nextPayment')
   const [errorMessage, setErrorMessage] = useState('')
   const [linkErrors, setLinkErrors] = useState({})
@@ -468,8 +479,16 @@ export default function App() {
       return matchesQuery && matchesStatus && matchesCategory
     })
 
+    if (dueWindowFilter === '7d') {
+      return sortSubscriptions(getDueWindowSubscriptions(filtered, 7, todayValue), sortKey)
+    }
+
+    if (dueWindowFilter === '30d') {
+      return sortSubscriptions(getDueWindowSubscriptions(filtered, 30, todayValue), sortKey)
+    }
+
     return sortSubscriptions(filtered, sortKey)
-  }, [subscriptions, query, statusFilter, categoryFilter, sortKey])
+  }, [subscriptions, query, statusFilter, categoryFilter, dueWindowFilter, sortKey, todayValue])
 
   const metrics = useMemo(() => {
     const totalMonthly = subscriptions.reduce((sum, subscription) => {
@@ -487,6 +506,16 @@ export default function App() {
       activeCount,
     }
   }, [subscriptions])
+
+  const monthlyActualSpend = useMemo(
+    () => getMonthlyActualSpend(subscriptions, { months: 6, todayValue }),
+    [subscriptions, todayValue],
+  )
+
+  const highestMonthlyActualSpend = useMemo(
+    () => monthlyActualSpend.reduce((max, month) => Math.max(max, month.total), 0),
+    [monthlyActualSpend],
+  )
 
   const upcomingPayments = useMemo(() => {
     return [...subscriptions]
@@ -788,6 +817,27 @@ export default function App() {
               <p className="text-2xl font-semibold text-slate-900 dark:text-slate-100">{metrics.activeCount}</p>
             </div>
           </div>
+
+          <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
+            <p className="text-sm text-slate-500 dark:text-slate-400">Actual spend (last 6 months)</p>
+            <div className="mt-3 flex h-24 items-end gap-2">
+              {monthlyActualSpend.map((month) => {
+                const barHeight = highestMonthlyActualSpend > 0 ? Math.max((month.total / highestMonthlyActualSpend) * 100, month.total > 0 ? 8 : 0) : 0
+                return (
+                  <div key={month.monthKey} className="flex min-w-0 flex-1 flex-col items-center gap-1">
+                    <div className="flex h-16 w-full items-end rounded bg-slate-200/70 px-1 dark:bg-slate-700/70">
+                      <div
+                        className="w-full rounded bg-brand-500"
+                        style={{ height: `${barHeight}%` }}
+                        title={`${month.label}: ${currencyFormatter.format(month.total)}`}
+                      />
+                    </div>
+                    <span className="text-[11px] text-slate-500 dark:text-slate-400">{month.label}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
         </header>
 
         <section className="grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
@@ -797,7 +847,25 @@ export default function App() {
                 <h2 className="text-xl font-semibold">Your subscriptions</h2>
                 <p className="text-sm text-slate-500 dark:text-slate-400">{filteredSubscriptions.length} items</p>
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${dueWindowFilter === '7d'
+                    ? 'border-brand-500 bg-brand-500 text-white'
+                    : 'border-slate-200 text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300'}`}
+                  onClick={() => setDueWindowFilter((current) => (current === '7d' ? 'all' : '7d'))}
+                >
+                  Due in 7 days
+                </button>
+                <button
+                  type="button"
+                  className={`rounded-full border px-3 py-1.5 text-xs font-semibold transition ${dueWindowFilter === '30d'
+                    ? 'border-brand-500 bg-brand-500 text-white'
+                    : 'border-slate-200 text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300'}`}
+                  onClick={() => setDueWindowFilter((current) => (current === '30d' ? 'all' : '30d'))}
+                >
+                  Due in 30 days
+                </button>
                 <div className="relative">
                   <input
                     className="w-56 rounded-full border border-slate-200 bg-white px-4 py-2 text-sm focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-800 dark:focus:ring-brand-500/40"

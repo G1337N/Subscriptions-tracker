@@ -62,6 +62,57 @@ export const getDaysLeft = (dateValue, todayValue = formatDateLocal(new Date()))
   return diff < 0 ? 0 : diff
 }
 
+export const getDueWindowSubscriptions = (subscriptions, windowDays, todayValue = formatDateLocal(new Date())) => {
+  const window = Number(windowDays)
+  if (!Number.isFinite(window) || window < 0) return []
+
+  return subscriptions.filter((subscription) => {
+    if (subscription.status !== 'Active') return false
+    const daysLeft = getDaysLeft(subscription.nextPayment, todayValue)
+    return daysLeft <= window
+  })
+}
+
+export const getMonthlyActualSpend = (subscriptions, options = {}) => {
+  const months = Number.isFinite(options.months) ? Math.max(1, Math.floor(options.months)) : 6
+  const todayValue = toDateValue(options.todayValue) || formatDateLocal(new Date())
+  const today = new Date(`${todayValue}T00:00:00`)
+
+  if (Number.isNaN(today.getTime())) {
+    return []
+  }
+
+  const labels = []
+  const monthTotals = new Map()
+
+  for (let index = months - 1; index >= 0; index -= 1) {
+    const date = new Date(today.getFullYear(), today.getMonth() - index, 1)
+    const monthKey = `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`
+    labels.push(monthKey)
+    monthTotals.set(monthKey, 0)
+  }
+
+  subscriptions.forEach((subscription) => {
+    getCleanPayments(subscription).forEach((payment) => {
+      const monthKey = payment.date.slice(0, 7)
+      if (monthTotals.has(monthKey)) {
+        monthTotals.set(monthKey, monthTotals.get(monthKey) + parseAmount(payment.amount))
+      }
+    })
+  })
+
+  return labels.map((monthKey) => {
+    const [year, month] = monthKey.split('-')
+    const labelDate = new Date(Number(year), Number(month) - 1, 1)
+
+    return {
+      monthKey,
+      label: labelDate.toLocaleString(undefined, { month: 'short' }),
+      total: monthTotals.get(monthKey) || 0,
+    }
+  })
+}
+
 export const renewSubscription = (subscription, renewal) => {
   const renewalDate = toDateValue(renewal.paymentDate)
   const expiryDate = toDateValue(renewal.newExpiryDate)
