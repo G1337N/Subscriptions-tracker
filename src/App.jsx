@@ -319,10 +319,11 @@ export default function App() {
   const [renewingSubscriptionId, setRenewingSubscriptionId] = useState(null)
   const [renewForm, setRenewForm] = useState({ amountPaid: '', paymentDate: getTodayDate(), newExpiryDate: '' })
   const [renewError, setRenewError] = useState('')
+  const [deletingSubscriptionId, setDeletingSubscriptionId] = useState(null)
   const storeRef = useRef(null)
 
   useEffect(() => {
-    if (!renewingSubscriptionId) return
+    if (!renewingSubscriptionId && !deletingSubscriptionId) return
 
     const { body } = document
     const previousOverflow = body.style.overflow
@@ -332,7 +333,7 @@ export default function App() {
     return () => {
       body.style.overflow = previousOverflow
     }
-  }, [renewingSubscriptionId])
+  }, [renewingSubscriptionId, deletingSubscriptionId])
 
   const effectiveTheme = themePreference === 'system' ? systemTheme : themePreference
 
@@ -494,6 +495,24 @@ export default function App() {
       .slice(0, 3)
   }, [subscriptions])
 
+  const deletingSubscription = useMemo(
+    () => subscriptions.find((subscription) => subscription.id === deletingSubscriptionId) || null,
+    [subscriptions, deletingSubscriptionId],
+  )
+
+  useEffect(() => {
+    if (!deletingSubscriptionId) return
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        setDeletingSubscriptionId(null)
+      }
+    }
+
+    document.addEventListener('keydown', handleEscape)
+    return () => document.removeEventListener('keydown', handleEscape)
+  }, [deletingSubscriptionId])
+
   const resetForm = () => {
     setFormState(initialFormState)
     setEditingId(null)
@@ -618,17 +637,25 @@ export default function App() {
   }
 
   const handleDelete = (subscriptionId) => {
-    if (!confirm('Delete this subscription?')) return
-    setSubscriptions((prev) => prev.filter((subscription) => subscription.id !== subscriptionId))
+    setDeletingSubscriptionId(subscriptionId)
+  }
+
+  const confirmDeleteSubscription = () => {
+    if (!deletingSubscriptionId) return
+
+    setSubscriptions((prev) => prev.filter((subscription) => subscription.id !== deletingSubscriptionId))
     setLinkErrors((prev) => {
-      if (!prev[subscriptionId]) return prev
+      if (!prev[deletingSubscriptionId]) return prev
       const next = { ...prev }
-      delete next[subscriptionId]
+      delete next[deletingSubscriptionId]
       return next
     })
-    if (editingId === subscriptionId) {
+
+    if (editingId === deletingSubscriptionId) {
       resetForm()
     }
+
+    setDeletingSubscriptionId(null)
   }
 
   const handlePause = (subscription) => {
@@ -1090,6 +1117,45 @@ export default function App() {
             </div>
           </aside>
         </section>
+
+        {deletingSubscription && (
+          <div
+            className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/50 px-4"
+            onClick={() => setDeletingSubscriptionId(null)}
+          >
+            <div
+              className="w-full max-w-md rounded-2xl bg-white p-6 shadow-soft dark:bg-slate-900 dark:ring-1 dark:ring-slate-800"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="delete-subscription-title"
+              aria-describedby="delete-subscription-description"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <h3 id="delete-subscription-title" className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                Delete subscription?
+              </h3>
+              <p id="delete-subscription-description" className="mt-2 text-sm text-slate-500 dark:text-slate-400">
+                This will permanently remove <span className="font-semibold text-slate-700 dark:text-slate-200">{deletingSubscription.name}</span> from your tracker.
+              </p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 px-4 py-2 text-sm font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300"
+                  onClick={() => setDeletingSubscriptionId(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="rounded-full bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+                  onClick={confirmDeleteSubscription}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {renewingSubscriptionId && (
           <div className="fixed inset-0 z-30 overflow-y-auto overscroll-contain bg-slate-950/40 px-4 py-6">
