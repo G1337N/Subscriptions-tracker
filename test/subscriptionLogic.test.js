@@ -2,8 +2,10 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
   getDaysLeft,
+  getDistinctCategoryColors,
   getDueWindowSubscriptions,
   getMonthlyActualSpend,
+  getMonthlyPaymentEntries,
   getMonthlySpendCsv,
   getTotalLoggedSpend,
   renewSubscription,
@@ -149,4 +151,48 @@ test('getMonthlySpendCsv shapes monthly totals and category rows for export', ()
       '2026-03,2026-03-01,2026-03-31,40.00',
     ].join('\n'),
   )
+})
+
+test('getDistinctCategoryColors gives deterministic unique colors for palette-sized sets', () => {
+  const categories = ['Streaming', 'Productivity', 'Utilities', 'Gaming']
+  const colorsA = getDistinctCategoryColors(categories)
+  const colorsB = getDistinctCategoryColors([...categories].reverse())
+
+  assert.deepEqual(colorsA, colorsB)
+  assert.equal(Object.keys(colorsA).length, categories.length)
+  assert.equal(new Set(Object.values(colorsA)).size, categories.length)
+})
+
+test('getMonthlyPaymentEntries returns sorted rows for a given month', () => {
+  const subscriptions = [
+    {
+      id: 's1',
+      name: 'Music+',
+      category: 'Streaming',
+      payments: [
+        { id: 'p2', date: '2026-02-11', amount: 12 },
+        { id: 'p1', date: '2026-02-05', amount: 10 },
+      ],
+    },
+    {
+      id: 's2',
+      name: 'Work Suite',
+      category: 'Productivity',
+      payments: [{ id: 'p3', date: '2026-02-05', amount: 30 }],
+    },
+    {
+      id: 's3',
+      name: 'Video',
+      category: 'Streaming',
+      payments: [{ id: 'p4', date: '2026-03-01', amount: 20 }],
+    },
+  ]
+
+  const entries = getMonthlyPaymentEntries(subscriptions, '2026-02')
+
+  assert.deepEqual(entries.map((entry) => `${entry.date}:${entry.subscriptionName}:${entry.amount}`), [
+    '2026-02-05:Music+:10',
+    '2026-02-05:Work Suite:30',
+    '2026-02-11:Music+:12',
+  ])
 })

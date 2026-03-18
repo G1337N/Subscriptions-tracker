@@ -79,6 +79,80 @@ const defaultCategoryLabel = (subscription) => {
   return detail ? `Other: ${detail}` : 'Other'
 }
 
+
+export const categoryColorPalette = ['#0ea5e9', '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6']
+
+const toPositiveHash = (value) => {
+  let hash = 0
+  for (let index = 0; index < value.length; index += 1) {
+    hash = (hash << 5) - hash + value.charCodeAt(index)
+    hash |= 0
+  }
+  return Math.abs(hash)
+}
+
+export const getDistinctCategoryColors = (categoryLabels, palette = categoryColorPalette) => {
+  const normalizedLabels = [...new Set((Array.isArray(categoryLabels) ? categoryLabels : []).filter(Boolean))].sort((a, b) => a.localeCompare(b))
+  const activePalette = Array.isArray(palette) && palette.length > 0 ? palette : categoryColorPalette
+
+  if (normalizedLabels.length === 0) return {}
+
+  const usedIndexes = new Set()
+  const colorMap = {}
+  const paletteSize = activePalette.length
+  const globalSeed = toPositiveHash(normalizedLabels.join('|'))
+  const step = paletteSize > 1 ? (paletteSize % 2 === 0 ? paletteSize - 1 : paletteSize - 2) : 1
+
+  normalizedLabels.forEach((label, index) => {
+    const preferredIndex = (globalSeed + index * step + toPositiveHash(label)) % paletteSize
+
+    let paletteIndex = preferredIndex
+    if (usedIndexes.size < paletteSize) {
+      while (usedIndexes.has(paletteIndex)) {
+        paletteIndex = (paletteIndex + 1) % paletteSize
+      }
+      usedIndexes.add(paletteIndex)
+    }
+
+    colorMap[label] = activePalette[paletteIndex]
+  })
+
+  return colorMap
+}
+
+export const getMonthlyPaymentEntries = (subscriptions, monthKey, options = {}) => {
+  if (!/^\d{4}-\d{2}$/.test(String(monthKey || ''))) return []
+
+  const resolveCategoryLabel = typeof options.categoryLabelResolver === 'function'
+    ? options.categoryLabelResolver
+    : defaultCategoryLabel
+
+  const entries = []
+
+  subscriptions.forEach((subscription) => {
+    const category = resolveCategoryLabel(subscription)
+
+    getCleanPayments(subscription).forEach((payment) => {
+      if (!payment.date.startsWith(`${monthKey}-`)) return
+
+      entries.push({
+        id: payment.id,
+        subscriptionId: subscription.id,
+        subscriptionName: subscription.name || 'Unnamed subscription',
+        category,
+        amount: parseAmount(payment.amount),
+        date: payment.date,
+      })
+    })
+  })
+
+  return entries.sort((a, b) => {
+    if (a.date !== b.date) return a.date.localeCompare(b.date)
+    if (a.subscriptionName !== b.subscriptionName) return a.subscriptionName.localeCompare(b.subscriptionName)
+    return a.amount - b.amount
+  })
+}
+
 const escapeCsvValue = (value) => {
   const stringValue = String(value ?? '')
   if (/[",\n]/.test(stringValue)) {

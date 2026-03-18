@@ -6,7 +6,9 @@ import {
   getCleanPayments,
   getDaysLeft,
   getDueWindowSubscriptions,
+  getDistinctCategoryColors,
   getMonthlyActualSpend,
+  getMonthlyPaymentEntries,
   getMonthlySpendCsv,
   getTotalLoggedSpend,
   parseAmount,
@@ -142,17 +144,6 @@ const getTodayDate = () => formatDateLocal(new Date())
 const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const weekDayLabels = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
 const analyticsRangeOptions = [6, 12, 24]
-const categoryColorPalette = ['#0ea5e9', '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6']
-
-const getCategoryColor = (categoryLabel) => {
-  let hash = 0
-  for (let index = 0; index < categoryLabel.length; index += 1) {
-    hash = (hash << 5) - hash + categoryLabel.charCodeAt(index)
-    hash |= 0
-  }
-
-  return categoryColorPalette[Math.abs(hash) % categoryColorPalette.length]
-}
 
 const startOfDay = (value) => {
   const date = new Date(value)
@@ -343,6 +334,8 @@ export default function App() {
   const [analyticsRangeMonths, setAnalyticsRangeMonths] = useState(6)
   const [hoveredMonthKey, setHoveredMonthKey] = useState('')
   const [lockedMonthKey, setLockedMonthKey] = useState('')
+  const [expandedMonthCategories, setExpandedMonthCategories] = useState({})
+  const [paymentEntriesModalMonthKey, setPaymentEntriesModalMonthKey] = useState('')
   const [renewingSubscriptionId, setRenewingSubscriptionId] = useState(null)
   const [renewForm, setRenewForm] = useState({ amountPaid: '', paymentDate: getTodayDate(), newExpiryDate: '' })
   const [renewError, setRenewError] = useState('')
@@ -350,7 +343,7 @@ export default function App() {
   const storeRef = useRef(null)
 
   useEffect(() => {
-    if (!renewingSubscriptionId && !deletingSubscriptionId) return
+    if (!renewingSubscriptionId && !deletingSubscriptionId && !paymentEntriesModalMonthKey) return
 
     const { body } = document
     const previousOverflow = body.style.overflow
@@ -360,7 +353,7 @@ export default function App() {
     return () => {
       body.style.overflow = previousOverflow
     }
-  }, [renewingSubscriptionId, deletingSubscriptionId])
+  }, [renewingSubscriptionId, deletingSubscriptionId, paymentEntriesModalMonthKey])
 
   const effectiveTheme = themePreference === 'system' ? systemTheme : themePreference
 
@@ -540,6 +533,39 @@ export default function App() {
     [monthlyActualSpend, selectedMonthKey],
   )
 
+  const selectedMonthCategoryColors = useMemo(() => {
+    if (!selectedMonthDetails) return {}
+    return getDistinctCategoryColors(selectedMonthDetails.categories.map((entry) => entry.category))
+  }, [selectedMonthDetails])
+
+  const selectedMonthPaymentEntries = useMemo(() => {
+    if (!selectedMonthKey) return []
+    return getMonthlyPaymentEntries(subscriptions, selectedMonthKey, {
+      categoryLabelResolver: (subscription) => getCategoryLabel(subscription.category, subscription.categoryDetail),
+    })
+  }, [subscriptions, selectedMonthKey])
+
+  const selectedMonthEntriesByCategory = useMemo(() => {
+    return selectedMonthPaymentEntries.reduce((map, entry) => {
+      const currentEntries = map[entry.category] || []
+      currentEntries.push(entry)
+      map[entry.category] = currentEntries
+      return map
+    }, {})
+  }, [selectedMonthPaymentEntries])
+
+  const paymentEntriesModalMonth = useMemo(
+    () => monthlyActualSpend.find((month) => month.monthKey === paymentEntriesModalMonthKey) || null,
+    [monthlyActualSpend, paymentEntriesModalMonthKey],
+  )
+
+  const paymentEntriesModalEntries = useMemo(() => {
+    if (!paymentEntriesModalMonthKey) return []
+    return getMonthlyPaymentEntries(subscriptions, paymentEntriesModalMonthKey, {
+      categoryLabelResolver: (subscription) => getCategoryLabel(subscription.category, subscription.categoryDetail),
+    })
+  }, [subscriptions, paymentEntriesModalMonthKey])
+
   const upcomingPayments = useMemo(() => {
     return [...subscriptions]
       .filter((subscription) => subscription.status === 'Active')
@@ -564,6 +590,19 @@ export default function App() {
     document.addEventListener('keydown', handleEscape)
     return () => document.removeEventListener('keydown', handleEscape)
   }, [deletingSubscriptionId])
+
+  useEffect(() => {
+    if (!paymentEntriesModalMonthKey) return
+
+    const handleEscape = (event) => {
+      if (event.key === 'Escape') {
+        setPaymentEntriesModalMonthKey('')
+      }
+    }
+
+    document.addEventListener('keydown', handleEscape)
+    return () => document.removeEventListener('keydown', handleEscape)
+  }, [paymentEntriesModalMonthKey])
 
   const resetForm = () => {
     setFormState(initialFormState)
@@ -801,15 +840,38 @@ export default function App() {
     }
   }
 
-  const handleExportMonthlySpend = () => {
+  const handleExportMonthlySpend = async () => {
     if (monthlyActualSpend.length === 0) return
 
     const csv = getMonthlySpendCsv(monthlyActualSpend)
+    const fileName = `spend-history-${analyticsRangeMonths}m.csv`
+
+    if (isTauriRuntime) {
+      try {
+        const [{ save }, { writeTextFile }] = await Promise.all([
+          import('@tauri-apps/plugin-dialog'),
+          import('@tauri-apps/plugin-fs'),
+        ])
+
+        const selectedPath = await save({
+          defaultPath: fileName,
+          filters: [{ name: 'CSV', extensions: ['csv'] }],
+        })
+
+        if (selectedPath) {
+          await writeTextFile(selectedPath, csv)
+          return
+        }
+      } catch {
+        // fallback to anchor download for environments where plugins are unavailable
+      }
+    }
+
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = `spend-history-${analyticsRangeMonths}m.csv`
+    anchor.download = fileName
     document.body.appendChild(anchor)
     anchor.click()
     document.body.removeChild(anchor)
@@ -817,7 +879,31 @@ export default function App() {
   }
 
   const handleMonthClick = (monthKey) => {
-    setLockedMonthKey((current) => (current === monthKey ? '' : monthKey))
+    setLockedMonthKey((current) => {
+      const nextValue = current === monthKey ? '' : monthKey
+      if (!nextValue) {
+        setExpandedMonthCategories({})
+        setPaymentEntriesModalMonthKey('')
+      } else {
+        setPaymentEntriesModalMonthKey(nextValue)
+      }
+      return nextValue
+    })
+  }
+
+  const handleCategoryToggle = (category) => {
+    if (!selectedMonthKey) return
+
+    setExpandedMonthCategories((current) => {
+      const monthExpanded = current[selectedMonthKey] || {}
+      return {
+        ...current,
+        [selectedMonthKey]: {
+          ...monthExpanded,
+          [category]: !monthExpanded[category],
+        },
+      }
+    })
   }
 
   return (
@@ -873,6 +959,8 @@ export default function App() {
                     setAnalyticsRangeMonths(Number(event.target.value))
                     setHoveredMonthKey('')
                     setLockedMonthKey('')
+                    setExpandedMonthCategories({})
+                    setPaymentEntriesModalMonthKey('')
                   }}
                 >
                   {analyticsRangeOptions.map((months) => (
@@ -925,7 +1013,11 @@ export default function App() {
                       <button
                         type="button"
                         className="text-xs font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-300 dark:hover:text-brand-200"
-                        onClick={() => setLockedMonthKey('')}
+                        onClick={() => {
+                          setLockedMonthKey('')
+                          setExpandedMonthCategories({})
+                          setPaymentEntriesModalMonthKey('')
+                        }}
                       >
                         Clear selection
                       </button>
@@ -936,15 +1028,47 @@ export default function App() {
                     <p className="text-slate-500 dark:text-slate-400">No category spend logged for this month.</p>
                   ) : (
                     <ul className="space-y-1">
-                      {selectedMonthDetails.categories.map((entry) => (
-                        <li key={`${selectedMonthDetails.monthKey}-${entry.category}`} className="flex items-center justify-between gap-2 text-xs">
-                          <span className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
-                            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: getCategoryColor(entry.category) }} />
-                            {entry.category}
-                          </span>
-                          <span className="font-semibold text-slate-700 dark:text-slate-200">{currencyFormatter.format(entry.total)}</span>
-                        </li>
-                      ))}
+                      {selectedMonthDetails.categories.map((entry) => {
+                        const monthExpanded = expandedMonthCategories[selectedMonthKey] || {}
+                        const isExpanded = Boolean(monthExpanded[entry.category])
+                        const categoryRows = selectedMonthEntriesByCategory[entry.category] || []
+
+                        return (
+                          <li key={`${selectedMonthDetails.monthKey}-${entry.category}`} className="rounded-lg border border-transparent p-1 hover:border-slate-200 dark:hover:border-slate-700">
+                            <div className="flex items-center justify-between gap-2 text-xs">
+                              <button
+                                type="button"
+                                className="flex items-center gap-2 rounded-full border border-slate-200 px-2 py-1 text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300"
+                                onClick={() => handleCategoryToggle(entry.category)}
+                                aria-expanded={isExpanded}
+                              >
+                                <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: selectedMonthCategoryColors[entry.category] || '#64748b' }} />
+                                {entry.category}
+                                <span className="text-[10px]">{isExpanded ? '▲' : '▼'}</span>
+                              </button>
+                              <span className="font-semibold text-slate-700 dark:text-slate-200">{currencyFormatter.format(entry.total)}</span>
+                            </div>
+
+                            {isExpanded && (
+                              <div className="mt-2 space-y-1 rounded-md bg-slate-50 p-2 dark:bg-slate-800/60">
+                                {categoryRows.length === 0 ? (
+                                  <p className="text-[11px] text-slate-500 dark:text-slate-400">No entries found.</p>
+                                ) : (
+                                  categoryRows.map((row) => (
+                                    <div key={`${row.subscriptionId}-${row.id}`} className="flex items-center justify-between gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                                      <div className="min-w-0">
+                                        <p className="truncate font-medium text-slate-700 dark:text-slate-200">{row.subscriptionName}</p>
+                                        <p>{row.date}</p>
+                                      </div>
+                                      <span className="font-semibold">{currencyFormatter.format(row.amount)}</span>
+                                    </div>
+                                  ))
+                                )}
+                              </div>
+                            )}
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                 </div>
@@ -1335,6 +1459,54 @@ export default function App() {
                 >
                   Delete
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {paymentEntriesModalMonth && (
+          <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-950/60 px-4" onClick={() => setPaymentEntriesModalMonthKey('')}>
+            <div
+              className="w-full max-w-2xl rounded-2xl bg-white p-6 shadow-soft dark:bg-slate-900 dark:ring-1 dark:ring-slate-800"
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="payment-entries-title"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 id="payment-entries-title" className="text-lg font-semibold text-slate-900 dark:text-slate-100">
+                    Payment entries · {paymentEntriesModalMonth.monthKey}
+                  </h3>
+                  <p className="text-sm text-slate-500 dark:text-slate-400">
+                    Exact transactions for this month ({currencyFormatter.format(paymentEntriesModalMonth.total)} total)
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300"
+                  onClick={() => setPaymentEntriesModalMonthKey('')}
+                >
+                  Close
+                </button>
+              </div>
+
+              <div className="mt-4 max-h-[60vh] overflow-y-auto rounded-lg border border-slate-200 dark:border-slate-700">
+                {paymentEntriesModalEntries.length === 0 ? (
+                  <p className="p-4 text-sm text-slate-500 dark:text-slate-400">No payment entries logged for this month.</p>
+                ) : (
+                  <ul className="divide-y divide-slate-200 dark:divide-slate-700">
+                    {paymentEntriesModalEntries.map((entry) => (
+                      <li key={`${entry.subscriptionId}-${entry.id}`} className="flex items-center justify-between gap-3 px-4 py-3 text-sm">
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold text-slate-800 dark:text-slate-100">{entry.subscriptionName}</p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">{entry.category} · {entry.date}</p>
+                        </div>
+                        <span className="font-semibold text-slate-700 dark:text-slate-200">{currencyFormatter.format(entry.amount)}</span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
           </div>
