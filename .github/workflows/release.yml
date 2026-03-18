@@ -58,7 +58,7 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Create or update release
-        uses: softprops/release-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag: ${{ steps.changelog.outputs.tag }}
           name: ${{ steps.changelog.outputs.tag }}
