@@ -4,6 +4,7 @@ import {
   getDaysLeft,
   getDueWindowSubscriptions,
   getMonthlyActualSpend,
+  getMonthlySpendCsv,
   getTotalLoggedSpend,
   renewSubscription,
 } from '../src/subscriptionLogic.js'
@@ -79,10 +80,11 @@ test('getDueWindowSubscriptions returns only active items due within the selecte
   )
 })
 
-test('getMonthlyActualSpend aggregates logged payments into the last 6 months with gaps as zero', () => {
+test('getMonthlyActualSpend aggregates logged payments for selected range with category breakdown', () => {
   const subscriptions = [
     {
       id: 's1',
+      category: 'Streaming',
       payments: [
         { id: 'p1', date: '2026-01-10', amount: 10 },
         { id: 'p2', date: '2026-02-10', amount: 20 },
@@ -90,6 +92,7 @@ test('getMonthlyActualSpend aggregates logged payments into the last 6 months wi
     },
     {
       id: 's2',
+      category: 'Productivity',
       payments: [
         { id: 'p3', date: '2026-02-04', amount: 30 },
         { id: 'p4', date: '2026-03-01', amount: 40 },
@@ -97,14 +100,53 @@ test('getMonthlyActualSpend aggregates logged payments into the last 6 months wi
     },
   ]
 
-  const series = getMonthlyActualSpend(subscriptions, { months: 6, todayValue: '2026-03-18' })
+  const series = getMonthlyActualSpend(subscriptions, { months: 12, todayValue: '2026-03-18' })
 
+  assert.equal(series.length, 12)
   assert.deepEqual(
-    series.map((item) => item.monthKey),
-    ['2025-10', '2025-11', '2025-12', '2026-01', '2026-02', '2026-03'],
+    series.slice(-3).map((item) => item.monthKey),
+    ['2026-01', '2026-02', '2026-03'],
   )
   assert.deepEqual(
-    series.map((item) => item.total),
-    [0, 0, 0, 10, 50, 40],
+    series.slice(-3).map((item) => item.total),
+    [10, 50, 40],
+  )
+
+  const february = series.find((item) => item.monthKey === '2026-02')
+  assert.deepEqual(february.categories, [
+    { category: 'Productivity', total: 30 },
+    { category: 'Streaming', total: 20 },
+  ])
+})
+
+test('getMonthlySpendCsv shapes monthly totals and category rows for export', () => {
+  const csv = getMonthlySpendCsv([
+    {
+      monthKey: '2026-02',
+      monthStart: '2026-02-01',
+      monthEnd: '2026-02-28',
+      total: 50,
+      categories: [
+        { category: 'Productivity', total: 30 },
+        { category: 'Streaming', total: 20 },
+      ],
+    },
+    {
+      monthKey: '2026-03',
+      monthStart: '2026-03-01',
+      monthEnd: '2026-03-31',
+      total: 40,
+      categories: [],
+    },
+  ])
+
+  assert.equal(
+    csv,
+    [
+      'Month,Month Start,Month End,Total,Category,Category Amount',
+      '2026-02,2026-02-01,2026-02-28,50.00,Productivity,30.00',
+      ',,,,Streaming,20.00',
+      '2026-03,2026-03-01,2026-03-31,40.00',
+    ].join('\n'),
   )
 })

@@ -73,6 +73,20 @@ export const getDueWindowSubscriptions = (subscriptions, windowDays, todayValue 
   })
 }
 
+const defaultCategoryLabel = (subscription) => {
+  if (subscription.category !== 'Other') return subscription.category || 'Uncategorized'
+  const detail = String(subscription.categoryDetail || '').trim()
+  return detail ? `Other: ${detail}` : 'Other'
+}
+
+const escapeCsvValue = (value) => {
+  const stringValue = String(value ?? '')
+  if (/[",\n]/.test(stringValue)) {
+    return `"${stringValue.replace(/"/g, '""')}"`
+  }
+  return stringValue
+}
+
 export const getMonthlyActualSpend = (subscriptions, options = {}) => {
   const months = Number.isFinite(options.months) ? Math.max(1, Math.floor(options.months)) : 6
   const todayValue = toDateValue(options.todayValue) || formatDateLocal(new Date())
@@ -82,35 +96,92 @@ export const getMonthlyActualSpend = (subscriptions, options = {}) => {
     return []
   }
 
-  const labels = []
-  const monthTotals = new Map()
+  const resolveCategoryLabel = typeof options.categoryLabelResolver === 'function'
+    ? options.categoryLabelResolver
+    : defaultCategoryLabel
+
+  const monthSeries = []
+  const monthsMap = new Map()
 
   for (let index = months - 1; index >= 0; index -= 1) {
     const date = new Date(today.getFullYear(), today.getMonth() - index, 1)
     const monthKey = `${date.getFullYear()}-${pad2(date.getMonth() + 1)}`
-    labels.push(monthKey)
-    monthTotals.set(monthKey, 0)
+
+    const monthEntry = {
+      monthKey,
+      label: date.toLocaleString(undefined, { month: 'short' }),
+      total: 0,
+      categories: [],
+      monthStart: formatDateLocal(new Date(date.getFullYear(), date.getMonth(), 1)),
+      monthEnd: formatDateLocal(new Date(date.getFullYear(), date.getMonth() + 1, 0)),
+    }
+
+    monthsMap.set(monthKey, {
+      ...monthEntry,
+      categoryTotals: new Map(),
+    })
+    monthSeries.push(monthKey)
   }
 
   subscriptions.forEach((subscription) => {
+    const categoryLabel = resolveCategoryLabel(subscription)
+
     getCleanPayments(subscription).forEach((payment) => {
       const monthKey = payment.date.slice(0, 7)
-      if (monthTotals.has(monthKey)) {
-        monthTotals.set(monthKey, monthTotals.get(monthKey) + parseAmount(payment.amount))
-      }
+      const monthEntry = monthsMap.get(monthKey)
+      if (!monthEntry) return
+
+      const amount = parseAmount(payment.amount)
+      monthEntry.total += amount
+      monthEntry.categoryTotals.set(categoryLabel, (monthEntry.categoryTotals.get(categoryLabel) || 0) + amount)
     })
   })
 
-  return labels.map((monthKey) => {
-    const [year, month] = monthKey.split('-')
-    const labelDate = new Date(Number(year), Number(month) - 1, 1)
+  return monthSeries.map((monthKey) => {
+    const monthEntry = monthsMap.get(monthKey)
+    const categories = [...monthEntry.categoryTotals.entries()]
+      .map(([category, total]) => ({ category, total }))
+      .sort((a, b) => b.total - a.total || a.category.localeCompare(b.category))
 
     return {
-      monthKey,
-      label: labelDate.toLocaleString(undefined, { month: 'short' }),
-      total: monthTotals.get(monthKey) || 0,
+      monthKey: monthEntry.monthKey,
+      label: monthEntry.label,
+      total: monthEntry.total,
+      categories,
+      monthStart: monthEntry.monthStart,
+      monthEnd: monthEntry.monthEnd,
     }
   })
+}
+
+export const getMonthlySpendCsv = (monthlySeries) => {
+  const header = ['Month', 'Month Start', 'Month End', 'Total', 'Category', 'Category Amount']
+  const rows = [header.join(',')]
+
+  monthlySeries.forEach((month) => {
+    const baseColumns = [
+      month.monthKey,
+      month.monthStart || `${month.monthKey}-01`,
+      month.monthEnd || '',
+      parseAmount(month.total).toFixed(2),
+    ]
+
+    if (!Array.isArray(month.categories) || month.categories.length === 0) {
+      rows.push(baseColumns.map(escapeCsvValue).join(','))
+      return
+    }
+
+    month.categories.forEach((categoryRow, index) => {
+      const columns = [
+        ...(index === 0 ? baseColumns : ['', '', '', '']),
+        categoryRow.category,
+        parseAmount(categoryRow.total).toFixed(2),
+      ]
+      rows.push(columns.map(escapeCsvValue).join(','))
+    })
+  })
+
+  return rows.join('\n')
 }
 
 export const renewSubscription = (subscription, renewal) => {

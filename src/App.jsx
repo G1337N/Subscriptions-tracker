@@ -7,6 +7,7 @@ import {
   getDaysLeft,
   getDueWindowSubscriptions,
   getMonthlyActualSpend,
+  getMonthlySpendCsv,
   getTotalLoggedSpend,
   parseAmount,
   renewSubscription,
@@ -140,6 +141,18 @@ const getTodayDate = () => formatDateLocal(new Date())
 
 const monthLabels = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
 const weekDayLabels = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su']
+const analyticsRangeOptions = [6, 12, 24]
+const categoryColorPalette = ['#0ea5e9', '#6366f1', '#8b5cf6', '#ec4899', '#f43f5e', '#ef4444', '#f97316', '#f59e0b', '#22c55e', '#14b8a6']
+
+const getCategoryColor = (categoryLabel) => {
+  let hash = 0
+  for (let index = 0; index < categoryLabel.length; index += 1) {
+    hash = (hash << 5) - hash + categoryLabel.charCodeAt(index)
+    hash |= 0
+  }
+
+  return categoryColorPalette[Math.abs(hash) % categoryColorPalette.length]
+}
 
 const startOfDay = (value) => {
   const date = new Date(value)
@@ -327,6 +340,9 @@ export default function App() {
   const [storeAccessible, setStoreAccessible] = useState(false)
   const [persistenceError, setPersistenceError] = useState('')
   const [todayValue, setTodayValue] = useState(getTodayDate)
+  const [analyticsRangeMonths, setAnalyticsRangeMonths] = useState(6)
+  const [hoveredMonthKey, setHoveredMonthKey] = useState('')
+  const [lockedMonthKey, setLockedMonthKey] = useState('')
   const [renewingSubscriptionId, setRenewingSubscriptionId] = useState(null)
   const [renewForm, setRenewForm] = useState({ amountPaid: '', paymentDate: getTodayDate(), newExpiryDate: '' })
   const [renewError, setRenewError] = useState('')
@@ -508,13 +524,20 @@ export default function App() {
   }, [subscriptions])
 
   const monthlyActualSpend = useMemo(
-    () => getMonthlyActualSpend(subscriptions, { months: 6, todayValue }),
-    [subscriptions, todayValue],
+    () => getMonthlyActualSpend(subscriptions, { months: analyticsRangeMonths, todayValue }),
+    [subscriptions, analyticsRangeMonths, todayValue],
   )
 
   const highestMonthlyActualSpend = useMemo(
     () => monthlyActualSpend.reduce((max, month) => Math.max(max, month.total), 0),
     [monthlyActualSpend],
+  )
+
+  const selectedMonthKey = lockedMonthKey || hoveredMonthKey
+
+  const selectedMonthDetails = useMemo(
+    () => monthlyActualSpend.find((month) => month.monthKey === selectedMonthKey) || null,
+    [monthlyActualSpend, selectedMonthKey],
   )
 
   const upcomingPayments = useMemo(() => {
@@ -778,6 +801,25 @@ export default function App() {
     }
   }
 
+  const handleExportMonthlySpend = () => {
+    if (monthlyActualSpend.length === 0) return
+
+    const csv = getMonthlySpendCsv(monthlyActualSpend)
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `spend-history-${analyticsRangeMonths}m.csv`
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    URL.revokeObjectURL(url)
+  }
+
+  const handleMonthClick = (monthKey) => {
+    setLockedMonthKey((current) => (current === monthKey ? '' : monthKey))
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 transition-colors dark:bg-slate-950 dark:text-slate-100">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-10">
@@ -819,23 +861,96 @@ export default function App() {
           </div>
 
           <div className="rounded-xl border border-slate-100 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800">
-            <p className="text-sm text-slate-500 dark:text-slate-400">Actual spend (last 6 months)</p>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-slate-500 dark:text-slate-400">Actual spend (default: last 6 months)</p>
+              <div className="flex flex-wrap items-center gap-2">
+                <label htmlFor="analytics-range" className="text-xs font-medium text-slate-500 dark:text-slate-400">Range</label>
+                <select
+                  id="analytics-range"
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold focus:border-brand-400 focus:outline-none focus:ring-2 focus:ring-brand-200 dark:border-slate-700 dark:bg-slate-900 dark:focus:ring-brand-500/40"
+                  value={analyticsRangeMonths}
+                  onChange={(event) => {
+                    setAnalyticsRangeMonths(Number(event.target.value))
+                    setHoveredMonthKey('')
+                    setLockedMonthKey('')
+                  }}
+                >
+                  {analyticsRangeOptions.map((months) => (
+                    <option key={months} value={months}>{months} months</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:border-brand-300 hover:text-brand-600 dark:border-slate-700 dark:text-slate-300 dark:hover:border-brand-500 dark:hover:text-brand-300"
+                  onClick={handleExportMonthlySpend}
+                >
+                  Export CSV
+                </button>
+              </div>
+            </div>
+
             <div className="mt-3 flex h-24 items-end gap-2">
               {monthlyActualSpend.map((month) => {
                 const barHeight = highestMonthlyActualSpend > 0 ? Math.max((month.total / highestMonthlyActualSpend) * 100, month.total > 0 ? 8 : 0) : 0
+                const isSelected = selectedMonthKey === month.monthKey
                 return (
                   <div key={month.monthKey} className="flex min-w-0 flex-1 flex-col items-center gap-1">
-                    <div className="flex h-16 w-full items-end rounded bg-slate-200/70 px-1 dark:bg-slate-700/70">
-                      <div
+                    <button
+                      type="button"
+                      className={`flex h-16 w-full items-end rounded px-1 transition ${isSelected ? 'bg-brand-100 ring-1 ring-brand-400 dark:bg-brand-500/20 dark:ring-brand-300' : 'bg-slate-200/70 dark:bg-slate-700/70'}`}
+                      onMouseEnter={() => setHoveredMonthKey(month.monthKey)}
+                      onMouseLeave={() => setHoveredMonthKey('')}
+                      onClick={() => handleMonthClick(month.monthKey)}
+                      title={`${month.label}: ${currencyFormatter.format(month.total)}`}
+                    >
+                      <span
                         className="w-full rounded bg-brand-500"
                         style={{ height: `${barHeight}%` }}
-                        title={`${month.label}: ${currencyFormatter.format(month.total)}`}
                       />
-                    </div>
+                    </button>
                     <span className="text-[11px] text-slate-500 dark:text-slate-400">{month.label}</span>
                   </div>
                 )
               })}
+            </div>
+
+            <div className="mt-4 rounded-lg border border-slate-200 bg-white p-3 text-sm dark:border-slate-700 dark:bg-slate-900">
+              {selectedMonthDetails ? (
+                <div className="space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <p className="font-semibold text-slate-800 dark:text-slate-100">
+                      {selectedMonthDetails.monthKey} total: {currencyFormatter.format(selectedMonthDetails.total)}
+                    </p>
+                    {lockedMonthKey && (
+                      <button
+                        type="button"
+                        className="text-xs font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-300 dark:hover:text-brand-200"
+                        onClick={() => setLockedMonthKey('')}
+                      >
+                        Clear selection
+                      </button>
+                    )}
+                  </div>
+
+                  {selectedMonthDetails.categories.length === 0 ? (
+                    <p className="text-slate-500 dark:text-slate-400">No category spend logged for this month.</p>
+                  ) : (
+                    <ul className="space-y-1">
+                      {selectedMonthDetails.categories.map((entry) => (
+                        <li key={`${selectedMonthDetails.monthKey}-${entry.category}`} className="flex items-center justify-between gap-2 text-xs">
+                          <span className="flex items-center gap-2 text-slate-600 dark:text-slate-300">
+                            <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: getCategoryColor(entry.category) }} />
+                            {entry.category}
+                          </span>
+                          <span className="font-semibold text-slate-700 dark:text-slate-200">{currencyFormatter.format(entry.total)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : (
+                <p className="text-slate-500 dark:text-slate-400">Hover a month for category breakdown. Click a month to lock the drilldown panel.</p>
+              )}
             </div>
           </div>
         </header>
