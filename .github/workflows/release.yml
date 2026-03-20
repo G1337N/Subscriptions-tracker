@@ -1,9 +1,10 @@
-name: Build and Release
+name: Release
 
 on:
   push:
     branches:
       - master
+  workflow_dispatch:
 
 jobs:
   build-windows:
@@ -36,8 +37,45 @@ jobs:
           path: src-tauri/target/release/bundle/nsis/*.exe
           retention-days: 7
 
+  build-linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Tauri app (deb + rpm)
+        run: npx tauri build --bundles deb,rpm
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+      - name: Upload Linux artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-bundles
+          path: src-tauri/target/release/bundle/deb/*.deb
+          retention-days: 7
+
+      - name: Upload RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-rpm
+          path: src-tauri/target/release/bundle/rpm/*.rpm
+          retention-days: 7
+
   release:
-    needs: build-windows
+    needs: [build-windows, build-linux]
     runs-on: ubuntu-latest
 
     steps:
@@ -48,7 +86,19 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: windows-nsis-installer
-          path: installer
+          path: artifacts/windows
+
+      - name: Download Linux deb
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-bundles
+          path: artifacts/linux
+
+      - name: Download Linux rpm
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-rpm
+          path: artifacts/linux
 
       - name: Generate release info
         id: release_info
@@ -58,11 +108,16 @@ jobs:
           echo "release_name=$TAG" >> $GITHUB_OUTPUT
 
           BODY_CHANGES=$(git log --oneline -10 | sed 's/^/ - /')
-          BODY="## Windows Installer
+          BODY="## Downloads
 
-Download the latest installer and run it to install.
+### Windows
+- \`Subscription.Tracker_*_x64-setup.exe\` — NSIS installer
 
-### Changes since last release
+### Linux
+- \`Subscription.Tracker_*_amd64.deb\` — Debian/Ubuntu
+- \`Subscription.Tracker-*-1.x86_64.rpm\` — Fedora/RHEL
+
+## Changes
 
 ${BODY_CHANGES}"
           printf '%s' "$BODY" > release_body.md
@@ -74,7 +129,10 @@ ${BODY_CHANGES}"
           tag_name: ${{ steps.release_info.outputs.tag_name }}
           name: ${{ steps.release_info.outputs.release_name }}
           body_path: ${{ steps.release_info.outputs.body_path }}
-          files: installer/*.exe
+          files: |
+            artifacts/windows/*.exe
+            artifacts/linux/*.deb
+            artifacts/linux/*.rpm
           draft: false
           prerelease: false
           overwrite: true
