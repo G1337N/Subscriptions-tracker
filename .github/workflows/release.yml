@@ -108,19 +108,11 @@ jobs:
           echo "release_name=$TAG" >> $GITHUB_OUTPUT
 
           BODY_CHANGES=$(git log --oneline -10 | sed 's/^/ - /')
-          BODY="## Downloads
-
-### Windows
-- \`Subscription.Tracker_*_x64-setup.exe\` — NSIS installer
-
-### Linux
-- \`Subscription.Tracker_*_amd64.deb\` — Debian/Ubuntu
-- \`Subscription.Tracker-*-1.x86_64.rpm\` — Fedora/RHEL
-
-## Changes
-
-${BODY_CHANGES}"
-          printf '%s' "$BODY" > release_body.md
+          printf '## Downloads\n\n' > release_body.md
+          printf '### Windows\n- `Subscription.Tracker_*_x64-setup.exe` — NSIS installer\n\n' >> release_body.md
+          printf '### Linux\n- `Subscription.Tracker_*_amd64.deb` — Debian/Ubuntu\n- `Subscription.Tracker-*-1.x86_64.rpm` — Fedora/RHEL\n\n' >> release_body.md
+          printf '## Changes\n\n' >> release_body.md
+          printf '%s\n' "$BODY_CHANGES" >> release_body.md
           echo "body_path=release_body.md" >> $GITHUB_OUTPUT
 
       - name: Create or update release
