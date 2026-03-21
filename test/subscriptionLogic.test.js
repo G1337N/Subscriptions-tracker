@@ -1,7 +1,10 @@
+/* global process */
 import test from 'node:test'
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import {
   getDaysLeft,
+  getDateDiffInDays,
   getDistinctCategoryColors,
   getDueWindowSubscriptions,
   getMonthlyActualSpend,
@@ -60,6 +63,29 @@ test('renewSubscription appends renewal payment and updates next expiry', () => 
 test('getDaysLeft returns 0 for expired and integer for future', () => {
   assert.equal(getDaysLeft('2026-03-20', '2026-03-17'), 3)
   assert.equal(getDaysLeft('2026-03-01', '2026-03-17'), 0)
+})
+
+test('getDateDiffInDays preserves local calendar days for date-only strings', () => {
+  assert.equal(getDateDiffInDays('2026-03-15', '2026-03-14'), 1)
+
+  const output = execFileSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `import { getDateDiffInDays, sortSubscriptions } from './src/subscriptionLogic.js';
+const diff = getDateDiffInDays('2026-03-15', '2026-03-14');
+const sorted = sortSubscriptions([{ id: 'a', nextPayment: '2026-03-15' }, { id: 'b', nextPayment: '2026-03-16' }], 'nextPayment').map((item) => item.nextPayment).join(',');
+console.log(diff + '|' + sorted);`,
+    ],
+    {
+      cwd: process.cwd(),
+      env: { ...process.env, TZ: 'America/New_York' },
+      encoding: 'utf8',
+    },
+  ).trim()
+
+  assert.equal(output, '1|2026-03-15,2026-03-16')
 })
 
 test('getDueWindowSubscriptions returns only active items due within the selected window', () => {

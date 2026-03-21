@@ -1,12 +1,35 @@
 const pad2 = (value) => String(value).padStart(2, '0')
+const DAY_IN_MS = 1000 * 60 * 60 * 24
 
 export const formatDateLocal = (date) => `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+
+export const parseDateValue = (value) => {
+  const normalized = typeof value === 'string' ? value.trim() : ''
+  const match = normalized.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+
+  if (match) {
+    const [, year, month, day] = match
+    return new Date(Number(year), Number(month) - 1, Number(day))
+  }
+
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? new Date(Number.NaN) : date
+}
+
+export const getDateDiffInDays = (dateValue, compareValue) => {
+  const compareDate = parseDateValue(`${toDateValue(compareValue)}T00:00:00`)
+  const targetDate = parseDateValue(`${toDateValue(dateValue)}T00:00:00`)
+
+  if (Number.isNaN(targetDate.getTime()) || Number.isNaN(compareDate.getTime())) return 0
+
+  return Math.round((targetDate - compareDate) / DAY_IN_MS)
+}
 
 export const toDateValue = (value) => {
   if (!value) return ''
   if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value
 
-  const date = new Date(value)
+  const date = parseDateValue(value)
   if (Number.isNaN(date.getTime())) return ''
   return formatDateLocal(date)
 }
@@ -44,7 +67,7 @@ export const getCleanPayments = (subscription) => {
     }
   })
 
-  return [...unique.values()].sort((a, b) => new Date(a.date) - new Date(b.date))
+  return [...unique.values()].sort((a, b) => parseDateValue(a.date) - parseDateValue(b.date))
 }
 
 export const getTotalLoggedSpend = (subscriptions) =>
@@ -55,10 +78,7 @@ export const getTotalLoggedSpend = (subscriptions) =>
 
 export const getDaysLeft = (dateValue, todayValue = formatDateLocal(new Date())) => {
   if (!dateValue) return 0
-  const today = new Date(`${todayValue}T00:00:00`)
-  const target = new Date(`${toDateValue(dateValue)}T00:00:00`)
-  if (Number.isNaN(target.getTime()) || Number.isNaN(today.getTime())) return 0
-  const diff = Math.ceil((target - today) / (1000 * 60 * 60 * 24))
+  const diff = getDateDiffInDays(dateValue, todayValue)
   return diff < 0 ? 0 : diff
 }
 
@@ -98,9 +118,9 @@ export const sortSubscriptions = (items, sortKey, options = {}) => {
         return a.name.localeCompare(b.name)
       })
     case 'nextPayment':
-      return sorted.sort((a, b) => new Date(a.nextPayment) - new Date(b.nextPayment))
+      return sorted.sort((a, b) => parseDateValue(a.nextPayment) - parseDateValue(b.nextPayment))
     default:
-      return sorted.sort((a, b) => new Date(a.nextPayment) - new Date(b.nextPayment))
+      return sorted.sort((a, b) => parseDateValue(a.nextPayment) - parseDateValue(b.nextPayment))
   }
 }
 
@@ -301,6 +321,6 @@ export const renewSubscription = (subscription, renewal) => {
     nextPayment: expiryDate,
     status: 'Active',
     statusChangedAt: subscription.status === 'Paused' ? formatDateLocal(new Date()) : subscription.statusChangedAt || '',
-    payments: payments.sort((a, b) => new Date(a.date) - new Date(b.date)),
+    payments: payments.sort((a, b) => parseDateValue(a.date) - parseDateValue(b.date)),
   }
 }
