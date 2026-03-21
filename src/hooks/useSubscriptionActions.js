@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { open as openExternal } from '@tauri-apps/plugin-shell'
 import { exportSubscriptions } from '../lib/subscriptionExport'
+import { getErrorDetails, getSubmissionPayments } from '../lib/subscriptionSubmission'
 import {
   createSubscription as createSubscriptionRecord,
   deleteSubscription as deleteSubscriptionRecord,
@@ -10,7 +11,6 @@ import {
 } from '../tauriApi'
 
 export const useSubscriptionActions = ({
-  getCleanPayments,
   getTodayDate,
   initialFormState,
   normalizeAmount,
@@ -121,9 +121,8 @@ export const useSubscriptionActions = ({
       status: formState.status,
       statusChangedAt:
         editingId && existing && existing.status !== formState.status ? getTodayDate() : existing?.statusChangedAt || '',
-      payments: getCleanPayments({
-        ...(existing || {}),
-        payments: existing?.payments || [],
+      payments: getSubmissionPayments({
+        existingSubscription: existing,
         currentPayment: formState.currentPayment,
         amount: parsedAmount,
       }),
@@ -153,8 +152,9 @@ export const useSubscriptionActions = ({
         return next
       })
       resetForm()
-    } catch {
-      setErrorMessage('Could not save this subscription.')
+    } catch (error) {
+      const details = getErrorDetails(error)
+      setErrorMessage(details ? `Could not save this subscription: ${details}` : 'Could not save this subscription.')
     }
   }
 

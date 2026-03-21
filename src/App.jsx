@@ -207,7 +207,6 @@ export default function App() {
     setRenewingSubscriptionId,
     confirmDeleteSubscription,
   } = useSubscriptionActions({
-    getCleanPayments,
     getDateDiffInDays,
     getTodayDate,
     initialFormState,

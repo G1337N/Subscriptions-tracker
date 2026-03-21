@@ -1086,6 +1086,23 @@ mod tests {
     }
 
     #[test]
+    fn create_subscription_accepts_mid_month_current_and_next_payment_dates() {
+        let (_temp_dir, _app_data_dir, db_path) = test_paths();
+        init_database(&db_path).expect("init database");
+
+        let mut input = sample_subscription("sub-mid-month");
+        input.current_payment_date = Some("2026-03-16".to_string());
+        input.next_payment_date = Some("2026-04-16".to_string());
+        input.payments = Vec::new();
+
+        let created = create_subscription(&db_path, input).expect("create subscription");
+
+        assert_eq!(created.current_payment_date.as_deref(), Some("2026-03-16"));
+        assert_eq!(created.next_payment_date.as_deref(), Some("2026-04-16"));
+        assert!(created.payments.is_empty());
+    }
+
+    #[test]
     fn settings_round_trip_theme_preference() {
         let (_temp_dir, _app_data_dir, db_path) = test_paths();
         init_database(&db_path).expect("init database");

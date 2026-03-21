@@ -8,6 +8,7 @@ import {
   serializePayment,
   serializeSubscription,
 } from '../src/tauriApi.js'
+import { getSubmissionPayments } from '../src/lib/subscriptionSubmission.js'
 
 test('amount and cents helpers round predictably for currency values', () => {
   assert.equal(amountToCents(15.99), 1599)
@@ -103,4 +104,32 @@ test('payment helpers preserve ids and default generated ids', () => {
     date: '2026-03-01',
     amountCents: 1200,
   })
+})
+
+test('create path does not synthesize a payment row for current payment dates like 2026-03-16', () => {
+  assert.deepEqual(
+    getSubmissionPayments({
+      existingSubscription: null,
+      currentPayment: '2026-03-16',
+      amount: 9.99,
+    }),
+    [],
+  )
+})
+
+test('edit path preserves stored payments when current payment moves to 2026-03-16', () => {
+  assert.deepEqual(
+    getSubmissionPayments({
+      existingSubscription: {
+        id: 'spotify',
+        amount: 9.99,
+        currentPayment: '2026-03-05',
+        nextPayment: '2026-04-16',
+        payments: [{ id: 'legacy-spotify-2026-03-05', date: '2026-03-05', amount: 9.99 }],
+      },
+      currentPayment: '2026-03-16',
+      amount: 9.99,
+    }),
+    [{ id: 'legacy-spotify-2026-03-05', date: '2026-03-05', amount: 9.99 }],
+  )
 })
